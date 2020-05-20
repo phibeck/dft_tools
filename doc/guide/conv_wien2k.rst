@@ -72,6 +72,20 @@ The last line gives the energy window, relative to the Fermi energy,
 that is used for the projective Wannier functions. Note that, in
 accordance with Wien2k, we give energies in Rydberg units!
 
+It is also possible to specify a projective window providing a
+desired range of band indices. For this, set both energy values to 0.0
+and add another line with the lower and upper band index to be include
+in the projective window::
+
+  0.0 0.0
+  21 23
+
+This means that at all k-points bands number 21, 22 and 23 are
+included, which are in this case the t2g bands around the Fermi energy.
+Note that providing band indices is different from using an energy window
+where the number of included bands is usually not the same at all k-points.
+The lowest possible index is 1. 
+
 After setting up the :file:`case.indmftpr` input file, you run:
 
   `dmftproj`

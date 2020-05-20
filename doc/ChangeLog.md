@@ -2,9 +2,11 @@ Version 3.0.0
 -------------
 
 * Major rework of the VASP interface, including thorough documentation and tutorials
+* New option in dmftproj to select the projection window using band indices instead of energies
+* Major update and new functionalities of the BlockStructure class
 
 Thanks to all commit-contributors (in alphabetical order):
-Markus Aichhorn, Alexander Hampel, Oleg Peil, Malte Schueler, Nils Wentzell, Manuel Zingl
+Markus Aichhorn, Alexander Hampel, Gernot Kraberger, Oleg Peil, Hermann Schnait, Malte Schueler, Nils Wentzell, Manuel Zingl
 
 
 Version 2.2.1

@@ -146,7 +146,7 @@ C With SO, the number of ireps must not exceed 2*(2*l+1).
                WRITE(buf,'(a)')'END OF THE PRGM'
                CALL printout(0)
                STOP
-              END IF
+              ENDIF
              ELSE
 C Without SO, the number of ireps must not exceed (2*l+1).
               IF(lnreps(l,isrt).gt.(2*l+1)) THEN
@@ -157,7 +157,7 @@ C Without SO, the number of ireps must not exceed (2*l+1).
                WRITE(buf,'(a)')'END OF THE PRGM'
                CALL printout(0)
                STOP
-              END IF
+              ENDIF
              ENDIF
 C ---------------------------------------------------------------------------------------
 C
@@ -177,6 +177,7 @@ C lsort = index for each orbital (0 : not include / 1 : include / 2 : correlated
 C lnreps = number of irreducible representations for each orbital, table from 0 to lmax, from 1 to nsort (temporary variables)
 C correps = index for each irreducible representations of the correlated orbital, table from 1 to lnreps(l,isrt), from 0 to lmax, from 1 to nsort (temporary variable)
 C ifSOflag = table of correspondance isort -> optionSO (1 or 0). Only used for isort with correlated orbitals
+
         READ(iuinp,*) e_bot,e_top
 C e_bot, e_top : lower and upper limits of the energy window
 C
@@ -191,9 +192,28 @@ C
          WRITE(buf,'(a)')'END OF THE PRGM'
          CALL printout(0)
          STOP
-        END IF
+        ENDIF
 C ---------------------------------------------------------------------------------------
-C
+C If both energy window values are set to 0, read the next line for the
+C band indices defining the window. The same band indices are used at
+C all k-points
+
+        IF((e_bot==0).and.(e_top==0)) THEN
+         ifBANDIND = .TRUE.
+         READ(iuinp,*) b_bot, b_top
+         IF(b_bot.gt.b_top) THEN
+          WRITE(buf,'(a,a)')' The k-point index window ',
+     &     ' is ill-defined.'
+          CALL printout(0)
+          WRITE(buf,'(a)')'END OF THE PRGM'
+          CALL printout(0)
+          STOP
+         ENDIF
+        ELSE
+         ifBANDIND = .FALSE.
+        ENDIF
+
+
 C =====================================================================
 C Writing in the output file case.outdmftpr the previous informations :
 C =====================================================================
@@ -373,9 +393,15 @@ C the field crorb%ifSOflag = boolean (if SO are used or not)
 C
 C Printing the size of the Energy window
         CALL printout(0)
-        WRITE(buf,'(2(a,f10.5),a)')
+        IF(ifBANDIND) THEN
+         WRITE(buf,'(a,2(a,i3),a)')
+     &     'The Eigenstates are projected for the band indices from ',
+     &     'band Nr. ',b_bot,' to  ',b_top,'.'
+        ELSE
+         WRITE(buf,'(2(a,f10.5),a)')
      &     'The Eigenstates are projected in an energy window from ',
      &        e_bot,' Ry  to  ',e_top,' Ry around the Fermi level.'
+        ENDIF
         CALL printout(1)
 C
 C =======================================================================================
@@ -556,7 +582,7 @@ C
                WRITE(buf,'(a)')'END OF THE PRGM'
                CALL printout(0)
                STOP
-              END IF
+              ENDIF
 C ---------------------------------------------------------------------------------------
 C
 C It is assumed in the following that nLO is 0 or 1.
@@ -657,7 +683,11 @@ C
 C ----------------------------------------
 C Setting up the projections for all bands
 C ----------------------------------------
-        CALL set_projections(-Elarge,Elarge)
+        IF(ifBANDIND) THEN
+         CALL set_projections(1d0,1d6)
+        ELSE
+         CALL set_projections(-Elarge,Elarge)
+        ENDIF
 
 
 C Elarge is an energy variable equal to 1.d6 Rydberg (very large !!!)
@@ -675,21 +705,31 @@ C
 C The calculation of Wannier projectors is performed only if correlated orbitals are included.
         IF(ncrorb.NE.0) THEN
 C 
-C =====================================================================
-C Computation of the charge below the lower limit e_bot of the window :
-C =====================================================================
+C ==========================================================================
+C Computation of the charge below the lower limit e_bot/b_bot of the window :
+C ==========================================================================
 C
          WRITE(buf,'(a)')'======================================='
          CALL printout(0)
-         WRITE(buf,'(a,a,f10.5,a)')'Computation of the total ',
+         IF(ifBANDIND) THEN
+          WRITE(buf,'(a,a,i3)')'Computation of the total ',
+     &     'Charge below the lower band index Nr. ', b_bot  
+         ELSE
+          WRITE(buf,'(a,a,f10.5,a)')'Computation of the total ',
      &     'Charge below the lower limit of the energy window :',
      &     e_bot,' Ry'  
+         ENDIF
          CALL printout(1)
 C
 C ----------------------------------------
 C Setting up the projections for all bands
 C ----------------------------------------
-         CALL set_projections(-Elarge,e_bot)
+         IF(ifBANDIND) THEN
+C set_projections expects REAL(8)
+          CALL set_projections(1d0,REAL(b_bot-1,8))
+         ELSE
+          CALL set_projections(-Elarge,e_bot)
+         ENDIF
 C
 C ---------------------------------------------------------
 C Computation of the density matrices and the total charges
@@ -698,7 +738,7 @@ C
          IF(.NOT.ifBAND) CALL density(.FAlSE.,.FALSE.,qtot,.FALSE.)
 C A simple point integration is used. 
 C The computation is performed for all the included orbitals.
-C qtot is the total charge density below e_bot. 
+C qtot is the total charge density below e_bot/b_bot. 
 C Nothing will be printed in the file case.outdmftpr apart from the total charge qtot.
 C
 C
@@ -708,15 +748,25 @@ C ============================================================
 C
          WRITE(buf,'(a)')'======================================='
          CALL printout(0)
-         WRITE(buf,'(a,a,a,f10.5,a,f10.5,a)')'Computation of the ',
+         IF(ifBANDIND) THEN
+          WRITE(buf,'(a,a,a,i3,a,i3,a)')'Computation of the ',
+     &     'Occupancies and Density Matrices in the desired ',
+     &     'band range [ ',b_bot,'; ',b_top,']' 
+         ELSE
+          WRITE(buf,'(a,a,a,f10.5,a,f10.5,a)')'Computation of the ',
      &     'Occupancies and Density Matrices in the desired ',
      &     'energy window [ ',e_bot,'; ',e_top,']' 
+         ENDIF
          CALL printout(1)
 C
 C ----------------------------------------
 C Setting up the projections for all bands
 C ----------------------------------------
-         CALL set_projections(e_bot,e_top)
+         IF(ifBANDIND) THEN
+          CALL set_projections(REAL(b_bot,8),REAL(b_top,8))
+         ELSE
+          CALL set_projections(e_bot,e_top)
+         ENDIF
 C
 C ------------------------------------------------------------------------------
 C Orthonormalization of the projectors for correlated orbitals P(icrorb,ik,is) :
