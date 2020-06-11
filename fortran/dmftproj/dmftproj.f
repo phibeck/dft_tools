@@ -48,7 +48,7 @@ C
         INTEGER, DIMENSION(:,:), ALLOCATABLE :: lnreps
         INTEGER, DIMENSION(:,:,:), ALLOCATABLE :: correps
         INTEGER :: isrt, ie, l, m, isym, jatom
-        INTEGER :: lm, ik, ilo, ib, iatom, imu
+        INTEGER :: lm, ik, ilo, ib, iatom, imu, io
         INTEGER :: idum, i1, i2
         INTEGER :: m1, m2, lm1, lm2
         INTEGER :: is, irep, nbrep
@@ -57,6 +57,7 @@ C
         LOGICAL :: ifcorr
         REAL(KIND=8) :: fdum, rtetr
         REAL(KIND=8),PARAMETER :: Elarge=1d6
+        character(len=120) line
 C ================================
 C Processing of the command line :
 C ================================
@@ -178,14 +179,65 @@ C lnreps = number of irreducible representations for each orbital, table from 0 
 C correps = index for each irreducible representations of the correlated orbital, table from 1 to lnreps(l,isrt), from 0 to lmax, from 1 to nsort (temporary variable)
 C ifSOflag = table of correspondance isort -> optionSO (1 or 0). Only used for isort with correlated orbitals
 
-        READ(iuinp,*) e_bot,e_top
-C e_bot, e_top : lower and upper limits of the energy window
+        READ(iuinp,'(A)',iostat=io) line
+C Try reading the energies/bandindices and the proj_mode
+        READ(line,*,iostat=io) e_bot, e_top, proj_mode
+C If it fails we know that we are dealing with an older version of the indmftpr file
+C with only 2 values on the window line. proj_mode = 0.
+        IF(io.ne.0) THEN
+         proj_mode = 0
+         READ(line,*,iostat=io) e_bot, e_top
+         IF(io.ne.0) THEN
+          WRITE(buf,'(a,a)')' The energy window line',
+     &     ' is ill-defined.'
+          CALL printout(0)
+          STOP
+          WRITE(buf,'(a)')'END OF THE PRGM'
+         ENDIF
+        ENDIF
+
+C ---------------------------------------------------------------------------------------
+C proj_mode:
+C 0: use energy window for projection
+C 1: use all band indices present in the given energy window
+C    (same number of bands at all kpoints)
+C 2: use given band indices (same number of bands at all kpoints)
+C ---------------------------------------------------------------------------------------
+
+C ---------------------------------------------------------------------------------------
+C e_bot, e_top : lower/upper energy limits of window (used in mode 0)
+C b_bot, b_top : lower/upper band index of window (used in mode 2)
+C In mode 1 e_bot/e_top are provided in the input file and then
+C translated into b_bot/b_top
+C ---------------------------------------------------------------------------------------
 C
 C ---------------------------------------------------------------------------------------
-C Interruption of the prgm if the energy window is not well-defined.
-C -------------------------
+C Interruption of the prgm if the energy/band window or proj_mode is not well-defined.
+C ---------------------------------------------------------------------------------------
 C
-        IF(e_bot.gt.e_top) THEN
+        IF((proj_mode.lt.0) .or. (proj_mode.gt.2)) THEN
+         WRITE(buf,'(a,a)')' The energy window mode (3rd value)',
+     &     ' must be 0,1 or 2.'
+         CALL printout(0)
+         WRITE(buf,'(a)')'END OF THE PRGM'
+         CALL printout(0)
+         STOP
+        ENDIF
+        
+        IF(proj_mode==0) THEN
+                b_bot = 0
+                b_top = 0
+        ELSEIF(proj_mode==1) THEN
+                b_bot = 1e3
+                b_top = 1
+        ELSEIF(proj_mode==2) THEN
+                b_bot = INT(e_bot)
+                b_top = INT(e_top)
+                e_bot = 0.0
+                e_top = 0.0
+        ENDIF
+
+        IF((proj_mode.lt.2) .and. (e_bot.gt.e_top)) THEN
          WRITE(buf,'(a,a)')' The energy window ',
      &     ' is ill-defined.'
          CALL printout(0)
@@ -193,28 +245,16 @@ C
          CALL printout(0)
          STOP
         ENDIF
-C ---------------------------------------------------------------------------------------
-C If both energy window values are set to 0, read the next line for the
-C band indices defining the window. The same band indices are used at
-C all k-points
 
-        IF((e_bot==0).and.(e_top==0)) THEN
-         ifBANDIND = .TRUE.
-         READ(iuinp,*) b_bot, b_top
-         IF(b_bot.gt.b_top) THEN
+        IF((proj_mode==2) .and. (b_bot.gt.b_top)) THEN
           WRITE(buf,'(a,a)')' The k-point index window ',
      &     ' is ill-defined.'
           CALL printout(0)
           WRITE(buf,'(a)')'END OF THE PRGM'
           CALL printout(0)
           STOP
-         ENDIF
-        ELSE
-         ifBANDIND = .FALSE.
         ENDIF
-
-
-C =====================================================================
+        
 C Writing in the output file case.outdmftpr the previous informations :
 C =====================================================================
         WRITE(buf,'(a,a)')'Welcome in DMFTPROJ: ',
@@ -390,19 +430,6 @@ C the field crorb%ifSOflag = boolean (if SO are used or not)
             ENDIF    ! End of the lsort>0 if-then-else
           ENDDO      ! End of the l loop
         ENDDO        ! End of the isrt loop
-C
-C Printing the size of the Energy window
-        CALL printout(0)
-        IF(ifBANDIND) THEN
-         WRITE(buf,'(a,2(a,i3),a)')
-     &     'The Eigenstates are projected for the band indices from ',
-     &     'band Nr. ',b_bot,' to  ',b_top,'.'
-        ELSE
-         WRITE(buf,'(2(a,f10.5),a)')
-     &     'The Eigenstates are projected in an energy window from ',
-     &        e_bot,' Ry  to  ',e_top,' Ry around the Fermi level.'
-        ENDIF
-        CALL printout(1)
 C
 C =======================================================================================
 C Reading of the transformation matrices from the complex to the required angular basis :
@@ -670,6 +697,49 @@ C Printing in the file case.outdmftpr the fermi level (in Rydberg)
      &    'with respect to this value. (E_Fermi is now 0 Ry)'
         CALL printout(1)
 C
+C ---------------------------------------------------------------------------------------
+C If proj_mode=1 find now the lowest and highes band index
+C ---------------------------------------------------------------------------------------
+C
+        IF(proj_mode==1) THEN
+         DO is=1,ns
+           DO ik=1,nk
+             DO ib=kp(ik,is)%nbmin,kp(ik,is)%nbmax
+               IF(kp(ik,is)%eband(ib) > e_bot.AND.
+     &          kp(ik,is)%eband(ib).LE.e_top) THEN
+                IF(ib.gt.b_top) THEN
+                 b_top = ib
+                ENDIF
+                IF(ib.lt.b_bot) THEN
+                 b_bot = ib
+                ENDIF             
+               ENDIF
+             ENDDO    ! End of the ib loop
+           ENDDO      ! End of the ik loop
+         ENDDO        ! End of the is loop
+         e_top = 0.0
+         e_bot = 0.0
+        ENDIF
+
+C ---------------------------------------------------------------------------------------
+C Printing the size of the Energy window
+C ---------------------------------------------------------------------------------------
+
+        CALL printout(0)
+        IF(proj_mode==0) THEN
+         WRITE(buf,'(2(a,f10.5),a)')
+     &     'The Eigenstates are projected in an energy window from ',
+     &        e_bot,' Ry  to  ',e_top,' Ry around the Fermi level.'
+        ELSEIF(proj_mode==1) THEN
+         WRITE(buf,'(a,2(a,i3),a)')
+     &     'The Eigenstates are projected for the band indices from ',
+     &     'band Nr. ', b_bot,' to  ',b_top,'.'
+        ELSEIF(proj_mode==2) THEN         
+         WRITE(buf,'(a,2(a,i3),a)')
+     &     'The Eigenstates are projected for the band indices from ',
+     &     'band Nr. ',b_bot,' to  ',b_top,'.'
+        ENDIF
+        CALL printout(1)
 C
 C ==============================================================
 C Computation of the density matrices up to the Fermi level Ef :
@@ -683,10 +753,10 @@ C
 C ----------------------------------------
 C Setting up the projections for all bands
 C ----------------------------------------
-        IF(ifBANDIND) THEN
-         CALL set_projections(1d0,1d6)
-        ELSE
+        IF(proj_mode==0) THEN
          CALL set_projections(-Elarge,Elarge)
+        ELSE
+         CALL set_projections(1d0,1d6)
         ENDIF
 
 
@@ -711,24 +781,24 @@ C ==========================================================================
 C
          WRITE(buf,'(a)')'======================================='
          CALL printout(0)
-         IF(ifBANDIND) THEN
-          WRITE(buf,'(a,a,i3)')'Computation of the total ',
-     &     'Charge below the lower band index Nr. ', b_bot  
-         ELSE
+         IF(proj_mode==0) THEN
           WRITE(buf,'(a,a,f10.5,a)')'Computation of the total ',
      &     'Charge below the lower limit of the energy window :',
      &     e_bot,' Ry'  
+         ELSE
+          WRITE(buf,'(a,a,i3)')'Computation of the total ',
+     &     'Charge below the lower band index Nr. ', b_bot  
          ENDIF
          CALL printout(1)
 C
 C ----------------------------------------
 C Setting up the projections for all bands
 C ----------------------------------------
-         IF(ifBANDIND) THEN
+         IF(proj_mode==0) THEN
+          CALL set_projections(-Elarge,e_bot)
+         ELSE
 C set_projections expects REAL(8)
           CALL set_projections(1d0,REAL(b_bot-1,8))
-         ELSE
-          CALL set_projections(-Elarge,e_bot)
          ENDIF
 C
 C ---------------------------------------------------------
@@ -748,24 +818,24 @@ C ============================================================
 C
          WRITE(buf,'(a)')'======================================='
          CALL printout(0)
-         IF(ifBANDIND) THEN
-          WRITE(buf,'(a,a,a,i3,a,i3,a)')'Computation of the ',
-     &     'Occupancies and Density Matrices in the desired ',
-     &     'band range [ ',b_bot,'; ',b_top,']' 
-         ELSE
+         IF(proj_mode==0) THEN
           WRITE(buf,'(a,a,a,f10.5,a,f10.5,a)')'Computation of the ',
      &     'Occupancies and Density Matrices in the desired ',
      &     'energy window [ ',e_bot,'; ',e_top,']' 
+         ELSE
+          WRITE(buf,'(a,a,a,i3,a,i3,a)')'Computation of the ',
+     &     'Occupancies and Density Matrices in the desired ',
+     &     'band range [ ',b_bot,'; ',b_top,']' 
          ENDIF
          CALL printout(1)
 C
 C ----------------------------------------
 C Setting up the projections for all bands
 C ----------------------------------------
-         IF(ifBANDIND) THEN
-          CALL set_projections(REAL(b_bot,8),REAL(b_top,8))
-         ELSE
+         IF(proj_mode==0) THEN
           CALL set_projections(e_bot,e_top)
+         ELSE
+          CALL set_projections(REAL(b_bot,8),REAL(b_top,8))
          ENDIF
 C
 C ------------------------------------------------------------------------------

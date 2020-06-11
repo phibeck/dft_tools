@@ -24,7 +24,7 @@ c *****************************************************************************/
 C %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 C %%                                                                 %%
 C %% This subroutine sets up the projection matrices in the energy   %%
-C %% window [e1,e2]. If ifBANDIND=TRUE then e1 and e2 are not        %%
+C %% window [e1,e2]. If proj_mode is 1 or 2 then e1 and e2 are not   %%
 C %% energies, but directly used as band indices.                    %%
 C %% Two types of projection can be defined :                        %%
 C %%   - The projectors <u_orb|ik,ib,is> for the correlated orbital  %%
@@ -63,11 +63,11 @@ C
 C
 C ======================================================================
 C Selection of the bands which lie in the chosen energy window [e1;e2]
-C or ifBANDIND=TRUE e1 and e2 are directly used as band indices:       
+C or if proj_mode = [1,2] e1 and e2 are directly used as band indices:       
 C ======================================================================
 C
         
-        IF(ifBANDIND) THEN
+        IF(proj_mode.gt.0) THEN
 C The same number of bands are included at each k-point
          kp(:,:)%included=.TRUE.
 C Use directly e1 and e2 as band indices. Set to nbmin or

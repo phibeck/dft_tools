@@ -68,8 +68,8 @@ C     &    '/workpmc/martins/DMFTprojectors/newDMFTproj'
         INTEGER, DIMENSION(:,:), ALLOCATABLE :: lsort
         INTEGER, DIMENSION(:), ALLOCATABLE :: ifSOflag
         INTEGER, DIMENSION(:), ALLOCATABLE :: timeflag
-        INTEGER :: b_bot, b_top
-        LOGICAL :: ifSO, ifSP, ifBAND, ifBANDIND
+        INTEGER :: b_bot, b_top, proj_mode
+        LOGICAL :: ifSO, ifSP, ifBAND
         LOGICAL, DIMENSION(:), ALLOCATABLE :: notinclude
         REAL(KIND=8) :: eferm
         REAL(KIND=8) :: e_bot, e_top
