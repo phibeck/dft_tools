@@ -93,12 +93,6 @@ The third number is an optional flag to switch between different modes:
 In all modes the used energy range, i.e. band range, is printed to the
 :program:`dmftproj` output.
 
-This means that at all k-points bands number 21, 22 and 23 are
-included, which are in this case the t2g bands around the Fermi energy.
-Note that providing band indices is different from using an energy window
-where the number of included bands is usually not the same at all k-points.
-The lowest possible index is 1. 
-
 After setting up the :file:`case.indmftpr` input file, you run:
 
   `dmftproj`
