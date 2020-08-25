@@ -205,8 +205,12 @@ class Wannier90Converter(ct_tools.ConverterTools):
         # below)
         if kmesh_mode >= 0:
             n_k, k_mesh, bz_weights = self.kmesh_build(nki, kmesh_mode)
+            # k_mesh and bz_weights soon to be removed, replaced by kpts and kpt_weights
+            n_k, kpts, kpt_weights = self.kmesh_build(nki, kmesh_mode)
             self.n_k = n_k
             self.k_mesh = k_mesh
+            # k_mesh soon to be removed
+            self.kpts = kpts
 
         # not used in this version: reset to dummy values?
         n_reps = [1 for i in range(n_inequiv_shells)]
@@ -260,8 +264,12 @@ class Wannier90Converter(ct_tools.ConverterTools):
                     # then we should get 2*(nki/2)+nki%2 R points along that
                     # direction
                     n_k, k_mesh, bz_weights = self.kmesh_build(nki)
+                    # k_mesh and bz_weights soon to be removed, replaced by kpts and kpt_weights
+                    n_k, kpts, kpt_weights = self.kmesh_build(nki)
                 self.n_k = n_k
                 self.k_mesh = k_mesh
+                # k_mesh soon to be removed
+                self.kpts = kpts
 
                 # set the R vectors and their degeneracy
                 self.rvec = rvec
@@ -340,6 +348,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         # if calculations are spin-polarized, then renormalize k-point weights
         if SP == 1:
             bz_weights = 0.5 * bz_weights
+            kpt_weights = 0.5 * kpt_weights
 
         # Third, initialise the projectors
         k_dep_projection = 0   # we always have the same number of WFs at each k-point
@@ -392,7 +401,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
             things_to_save = ['energy_unit', 'n_k', 'k_dep_projection', 'SP', 'SO', 'charge_below', 'density_required',
                           'symm_op', 'n_shells', 'shells', 'n_corr_shells', 'corr_shells', 'use_rotations', 'rot_mat',
                           'rot_mat_time_inv', 'n_reps', 'dim_reps', 'T', 'n_orbitals', 'proj_mat', 'bz_weights', 'hopping',
-                          'n_inequiv_shells', 'corr_to_inequiv', 'inequiv_to_corr']
+                          'n_inequiv_shells', 'corr_to_inequiv', 'inequiv_to_corr','kpt_weights','kpts']
             for it in things_to_save:
                 ar[self.dft_subgrp][it] = locals()[it]
 
@@ -700,7 +709,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         -------
         nkpt : integer
             total number of k-points in the mesh
-        k_mesh : numpy.array[nkpt,3] of floats
+        kpts : numpy.array[nkpt,3] of floats
             the coordinates of all k-points
         wk : numpy.array[nkpt] of floats
             the weight of each k-point
@@ -713,17 +722,17 @@ class Wannier90Converter(ct_tools.ConverterTools):
         # a regular mesh including Gamma point
         # total number of k-points
         nkpt = msize[0] * msize[1] * msize[2]
-        kmesh = numpy.zeros((nkpt, 3), dtype=float)
+        kpts = numpy.zeros((nkpt, 3), dtype=float)
         ii = 0
         for ix, iy, iz in product(list(range(msize[0])), list(range(msize[1])), list(range(msize[2]))):
-            kmesh[ii, :] = [float(ix) / msize[0], float(iy) /
+            kpts[ii, :] = [float(ix) / msize[0], float(iy) /
                             msize[1], float(iz) / msize[2]]
             ii += 1
         # weight is equal for all k-points because wannier90 uses uniform grid on whole BZ
         # (normalization is always 1 and takes into account spin degeneracy)
         wk = numpy.ones([nkpt], dtype=float) / float(nkpt)
 
-        return nkpt, kmesh, wk
+        return nkpt, kpts, wk
 
     def fourier_ham(self, norb, h_of_r):
         """
@@ -751,7 +760,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
                   for ik in range(self.n_k)]
         ridx = numpy.array(list(range(self.nrpt)))
         for ik, ir in product(list(range(self.n_k)), ridx):
-            rdotk = twopi * numpy.dot(self.k_mesh[ik], self.rvec[ir])
+            rdotk = twopi * numpy.dot(self.kpts[ik], self.rvec[ir])
             factor = (math.cos(rdotk) + 1j * math.sin(rdotk)) / \
                 float(self.rdeg[ir])
             h_of_k[ik][:, :] += factor * h_of_r[ir][:, :]
