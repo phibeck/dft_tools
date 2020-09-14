@@ -65,7 +65,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
 
     def __init__(self, seedname, hdf_filename=None, dft_subgrp='dft_input',
                  symmcorr_subgrp='dft_symmcorr_input', repacking=False,
-                 rot_mat_type='hloc_diag', Bloch_basis=False):
+                 rot_mat_type='hloc_diag', bloch_basis=False):
         """
         Initialise the class.
 
@@ -84,7 +84,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         rot_mat_type : string, optional
             Type of rot_mat used
             Can be 'hloc_diag', 'wannier', 'none'
-        Bloch_basis : boolean, optional
+        bloch_basis : boolean, optional
             Should the Hamiltonian be written in Bloch rathern than Wannier basis?
         """
 
@@ -105,7 +105,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         # considered equal
         self._w90zero = 2.e-6
         self.rot_mat_type = rot_mat_type
-        self.Bloch_basis = Bloch_basis
+        self.bloch_basis = bloch_basis
         if self.rot_mat_type not in ('hloc_diag', 'wannier', 'none'):
             raise ValueError('Parameter rot_mat_type invalid, should be one of'
                              + '"hloc_diag", "wannier", "none"')
@@ -238,13 +238,13 @@ class Wannier90Converter(ct_tools.ConverterTools):
             if SP == 1:
                 mpi.report(
                     "Reading information for spin component n. %d" % isp)
-                hr_file = self.w90_seed + spin_w90name[isp] + '_hr.dat'
+                file_seed = self.w90_seed + spin_w90name[isp]
             else:
-                hr_file = self.w90_seed + '_hr.dat'
+                file_seed = self.w90_seed
             # now grab the data from the H(R) file
             mpi.report(
-                "The Hamiltonian in MLWF basis is extracted from %s ..." % hr_file)
-            nr, rvec, rdeg, nw, hamr, u_mat, udis_mat = self.read_wannier90hr(hr_file,self.Bloch_basis)
+                "The Hamiltonian in MLWF basis is extracted from %s files..." % file_seed)
+            nr, rvec, rdeg, nw, hamr, u_mat, udis_mat, band_mat = self.read_wannier90data(file_seed,self.bloch_basis)
             # number of R vectors, their indices, their degeneracy, number of
             # WFs, H(R)
             mpi.report("... done: %d R vectors, %d WFs found" % (nr, nw))
@@ -292,9 +292,16 @@ class Wannier90Converter(ct_tools.ConverterTools):
                 # we assume spin up and spin down always have same total number
                 # of WFs
                 # get second dimension of udis_mat which corresponds to number of bands in window
-                n_bnd = udis_mat.shape[1]
-                n_orbitals = numpy.ones(
-                    [self.n_k, n_spin], numpy.int) * n_bnd
+                # n_bnd_max corresponds to numpy.max(n_orbitals)
+                n_bnd_max = udis_mat.shape[1]
+                n_orbitals = numpy.ones([self.n_k, n_spin], numpy.int) * n_bnd_max 
+                # option to count n_orbitals in window, in case this is needed someday
+                #for ik in range(n_k):
+                #    # get number of bands within energy range at ik from udis_mat
+                #    n_bnd_k = numpy.apply_along_axis(lambda x: numpy.any(numpy.logical_not(numpy.isclose(x,0))),
+                #                                     1, udis_mat[ik,:,:])
+                #    n_orbitals[ik, isp] = sum(n_bnd_k)
+
 
             else:
                 # consistency check between the _up and _down file contents
@@ -351,14 +358,14 @@ class Wannier90Converter(ct_tools.ConverterTools):
             kpt_weights = 0.5 * kpt_weights
 
         # Third, initialise the projectors
-        k_dep_projection = 0   # we always have the same number of WFs at each k-point
+        k_dep_projection = 0   # at the moment not really used, but might get important
         proj_mat = numpy.zeros([self.n_k, n_spin, n_corr_shells, max(
             #[crsh['dim'] for crsh in corr_shells]), numpy.max(n_orbitals)], numpy.complex_)
-            [crsh['dim'] for crsh in corr_shells]), numpy.max(n_orbitals)], numpy.complex_)
+            [crsh['dim'] for crsh in corr_shells]), n_bnd_max], numpy.complex_)
         iorb = 0
         # Projectors simply consist in identity matrix blocks selecting those MLWFs that
         # correspond to the specific correlated shell indexed by icrsh.
-        # Update: Projectors are now either identity matrix blocks to use he Wannier basis
+        # Update: Projectors are either identity matrix blocks to use with Wannier basis
         # OR correspond to the overlap between Kohn-Sham and Wannier orbitals as
         # P_{nu,alpha](k) = <w_{alpha,k}|psi_{nu,k}>
         # NOTE: we assume that the correlated orbitals appear at the beginning of the H(R)
@@ -368,27 +375,35 @@ class Wannier90Converter(ct_tools.ConverterTools):
             u_temp = numpy.einsum('abc,acd->abd',udismat_full[isp],umat_full[isp])
             u_temp = numpy.transpose(u_temp.conj(),(0,2,1))
             for icrsh in range(n_corr_shells):
-                norb = corr_shells[icrsh]['dim']
+                dim = corr_shells[icrsh]['dim']
                 #proj_mat[:, :, icrsh, 0:norb, iorb:iorb +
                 #         norb] = numpy.identity(norb, numpy.complex_)
-                proj_mat[:, isp, icrsh, 0:norb, :] = u_temp[:,iorb:iorb+norb,:]
-                iorb += norb    
+                proj_mat[:, isp, icrsh, 0:dim, :] = u_temp[:,iorb:iorb+dim,:]
+                iorb += dim
 
         # Then, compute the hoppings in reciprocal space
-        hopping = numpy.zeros([self.n_k, n_spin, numpy.max(
-            n_orbitals), numpy.max(n_orbitals)], numpy.complex_)
+        hopping = numpy.zeros([self.n_k, n_spin, n_bnd_max, n_bnd_max], numpy.complex_)
         for isp in range(n_spin):
-            # make Fourier transform H(R) -> H(k) : it can be done one spin at
-            # a time
-            hamk = self.fourier_ham(self.nwfs, hamr_full[isp])
-            # copy the H(k) in the right place of hoppings... is there a better
-            # way to do this??
+            # if disentanglement is True, use Kohn-Sham eigenvalues as hamk
+            if n_bnd_max > self.nwfs:
+                # diagonal Kohn-Sham bands
+                hamk = [numpy.eye((n_bnd_max), dtype=numpy.complex_) for ik in range(self.n_k)]
+                for ik in range(self.n_k):
+                    hamk[ik][:,:] = numpy.eye(n_bnd_max) * band_mat[ik,:,2]
+            # else use fourier transform of H(R)
+            else:
+                # make Fourier transform H(R) -> H(k) : it can be done one spin at a time
+                hamk = self.fourier_ham(self.nwfs, hamr_full[isp])
+                # get upfolded hamk for usage with projectors
+                if self.bloch_basis == True:
+                    for ik in range(self.n_k):
+                        hamk[ik][:,:] = numpy.dot(proj_mat[ik,isp,:,:,:].reshape(self.nwfs,n_bnd_max).T.conj(), 
+                                                       numpy.dot(hamk[ik][:, :],
+                                                                 proj_mat[ik,isp,:,:,:].reshape(self.nwfs,n_bnd_max)))
+            # finally write hamk into hoppings
             for ik in range(self.n_k):
-                #hopping[ik,isp,:,:] = deepcopy(hamk[ik][:,:])*energy_unit
-                #hopping[ik, isp, :, :] = hamk[ik][:, :] * energy_unit
-                hopping[ik, isp, :, :] = numpy.dot(proj_mat[ik,isp,:,:,:].reshape(self.nwfs,n_bnd).T.conj(), 
-                                                   numpy.dot(hamk[ik][:, :] * energy_unit,
-                                                             proj_mat[ik,isp,:,:,:].reshape(self.nwfs,n_bnd)))
+                hopping[ik, isp, :, :] = hamk[ik][:, :] * energy_unit
+
 
         # Finally, save all required data into the HDF archive:
         # use_rotations is supposed to be an int = 0, 1, no bool
@@ -405,16 +420,17 @@ class Wannier90Converter(ct_tools.ConverterTools):
             for it in things_to_save:
                 ar[self.dft_subgrp][it] = locals()[it]
 
-    def read_wannier90hr(self, hr_filename="wannier_hr.dat",Bloch_basis=False):
+    def read_wannier90data(self, wannier_seed="wannier",bloch_basis=False):
         """
         Method for reading the seedname_hr.dat file produced by Wannier90 (http://wannier.org)
 
         Parameters
         ----------
-        hr_filename : string
-            full name of the H(R) file produced by Wannier90 (usually seedname_hr.dat)
-        Bloch_basis : boolean, optional
-            if true additional files *_u.mat and *_u_dis.mat are read
+        wannier_seed : string
+            seedname to read H(R) file produced by Wannier90 (usually seedname_hr.dat)
+        bloch_basis : boolean, optional
+            if true, additional files are read: KS Eigenvalues (usually seedname.eig) and U matrices
+            (usually seedname_u.mat and seedname_u_dis.mat for disentanglement)
 
         Returns
         -------
@@ -437,6 +453,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         if not (mpi.is_master_node()):
             return
 
+        hr_filename = wannier_seed + '_hr.dat' 
         try:
             with open(hr_filename, "r") as hr_filedesc:
                 hr_data = hr_filedesc.readlines()
@@ -453,39 +470,43 @@ class Wannier90Converter(ct_tools.ConverterTools):
         except ValueError:
             mpi.report("Could not read number of WFs or R vectors")
 
-        if Bloch_basis == True:
+        if bloch_basis == True:
+
+            # first, read u matrices from 'seedname_u.mat'
+            u_filename = wannier_seed + '_u.mat'
+            with open(u_filename,'r') as u_file:
+                u_data = u_file.readlines()
+                # reads number of kpoints and number of wannier functions
+                nu_k, num_wf_u, _ = map(int, u_data[1].split())
+                if num_wf_u is not num_wf:
+                    raise ValueError('#WFs must be identical for *_u.mat and *_hr.dat')
+            mpi.report('reading {:20}...{}'.format(u_filename,u_data[0]))                                                     
+            del u_data[:2]
+            
             try:
-                # read 'seedname_u.mat'
-                name_ext = hr_filename.split('_')[-1]
-                seedname = hr_filename.replace('_{}'.format(name_ext),'')
-                u_filename = seedname + '_u.mat'
-                with open(u_filename,'r') as u_file:
-                    u_data = u_file.readlines()
-                    # reads number of kpoints and number of wannier functions
-                    nu_k, num_wf_u, _ = map(int, u_data[1].split())
-                    if num_wf_u is not num_wf:
-                        raise ValueError('#WFs must be identical for *_u.mat and *_hr.dat')
-                mpi.report('reading {:20}...{}'.format(u_filename,u_data[0]))                                                     
-                del u_data[:2]
-                
-                # check if additionally disentanglement matrices were written    
-                try:
-                    # read 'seedname_u_dis.mat'
-                    udis_filename = seedname + '_u_dis.mat'
-                    with open(udis_filename,'r') as udis_file:
-                        udis_data = udis_file.readlines()
-                        # reads number of kpoints, number of wannier functions and bands
-                        nudis_k, num_wf_udis, num_bnd = map(int, udis_data[1].split())
-                        if num_wf_udis is not num_wf_u:
-                            raise ValueError('#WFs must be identical for *_u.mat and *_u_dis.mat')
-                    mpi.report('reading {:20}...{}'.format(udis_filename,udis_data[0]))
-                    del udis_data[:2]
-                    disentangle = True
-                except IOError:
-                    disentangle = False
-                    mpi.report("The file %s could not be read!" % udis_filename)
-            except IOError:
-                mpi.report("The file %s could not be read!" % u_filename)
+                # read 'seedname_u_dis.mat'
+                udis_filename = wannier_seed + '_u_dis.mat'
+                # if it exists the Kohn-Sham eigenvalues are needed
+                band_filename = wannier_seed + '.eig'
+
+                with open(udis_filename,'r') as udis_file:
+                    udis_data = udis_file.readlines()
+                    # reads number of kpoints, number of wannier functions and bands
+                    nudis_k, num_wf_udis, num_bnd = map(int, udis_data[1].split())
+                    if num_wf_udis is not num_wf_u:
+                        raise ValueError('#WFs must be identical for *_u.mat and *_u_dis.mat')
+                mpi.report('reading {:20}...{}'.format(udis_filename,udis_data[0]))
+                del udis_data[:2]
+                disentangle = True
+
+                # read Kohn-Sham eigenvalues from 'seedname.eig'
+                with open(band_filename,'r') as band_file:
+                    band_data = numpy.genfromtxt(band_file)
+                mpi.report('reading {:20}.'.format(band_filename))
+    
+            except:
+                disentangle = False
+                mpi.report('Files {} and/or {} missing, assuming an isolated set of bands.'.format(udis_filename,band_filename))
 
 
 
@@ -539,7 +560,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         except ValueError:
             mpi.report("Wrong data or structure in file %s" % hr_filename)
 
-        if Bloch_basis == True:
+        if bloch_basis == True:
             # initiate U matrices and fill from file "seedname_u.mat"
             u_mat = numpy.zeros([nu_k, num_wf, num_wf], numpy.complex_)
             for ik in range(nu_k):
@@ -554,7 +575,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
             for ik in range(self.n_k):
                 u_mat[ik,:,:] = numpy.identity(num_wf,numpy.complex_)
         
-        if Bloch_basis == True and disentangle == True: 
+        if bloch_basis == True and disentangle == True: 
             #initiate U disentanglement matrices and fill from file "seedname_u_dis.mat"
             udis_mat = numpy.zeros([nudis_k, num_bnd, num_wf], numpy.complex_)
             for ik in range(nudis_k):
@@ -562,6 +583,22 @@ class Wannier90Converter(ct_tools.ConverterTools):
                 kpt, vals = k_block[0], numpy.array(k_block[1:],dtype=float)
                 udis_of_k = numpy.apply_along_axis(lambda x: complex(x[0],x[1]), 1, vals)
                 udis_mat[ik,:,:] = udis_of_k.reshape(num_bnd,num_wf,order='F')
+            
+            # reshape band_data
+            band_mat = band_data.reshape(nudis_k,num_bnd,3)
+
+            ##initiate band energies and fill from file "seedname_band.dat"
+            #print(band_data.shape)
+            #band_mat = band_data.reshape(nudis_k,14,3)
+            #for ik in range(nudis_k):
+            #    print(band_mat[ik,:,2])
+            #    exit()
+            #exit()
+            #band_mat = numpy.zeros([num_bnd, nudis_k])
+            #for ik in range(nudis_k):
+            #    k_block = numpy.array([line.split() for line in band_data[ik*num_bnd:num_bnd*(ik+1)]])
+            #    val = numpy.array(k_block[:,2],dtype=numpy.float)
+            #    band_mat[:,ik] = val
 
         else:
             # no disentanglement; fill udis_mat with identity
@@ -569,9 +606,13 @@ class Wannier90Converter(ct_tools.ConverterTools):
             for ik in range(self.n_k):
                 udis_mat[ik,:,:] = numpy.identity(num_wf,numpy.complex_)
 
+            # create dummy entries for band_mat to multiply with Wannier Hamiltonian energies
+            band_mat = numpy.zeros([self.n_k, num_wf,3])
+            for ik in range(self.n_k):
+                band_mat[ik,:,2] = numpy.ones(num_wf)
 
         # return the data into variables
-        return nrpt, rvec_idx, rvec_deg, num_wf, h_of_r, u_mat, udis_mat
+        return nrpt, rvec_idx, rvec_deg, num_wf, h_of_r, u_mat, udis_mat, band_mat
 
     def find_rot_mat(self, n_sh, sh_lst, sh_map, ham0):
         """
@@ -745,8 +786,6 @@ class Wannier90Converter(ct_tools.ConverterTools):
             number of orbitals
         h_of_r : list of numpy.array[norb,norb]
             Hamiltonian H(R) in Wannier basis
-        proj_mat : missing
-            missing
 
         Returns
         -------
