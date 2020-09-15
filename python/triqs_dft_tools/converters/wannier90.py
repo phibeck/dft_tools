@@ -128,7 +128,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         # Read and write only on the master node
         if not (mpi.is_master_node()):
             return
-        mpi.report("Reading input from %s..." % self.inp_file)
+        mpi.report("\nReading input from %s..." % self.inp_file)
 
         # R is a generator : each R.Next() will return the next number in the
         # file
@@ -243,11 +243,11 @@ class Wannier90Converter(ct_tools.ConverterTools):
                 file_seed = self.w90_seed
             # now grab the data from the H(R) file
             mpi.report(
-                "The Hamiltonian in MLWF basis is extracted from %s files..." % file_seed)
+                "\nThe Hamiltonian in MLWF basis is extracted from %s files..." % file_seed)
             nr, rvec, rdeg, nw, hamr, u_mat, udis_mat, band_mat = self.read_wannier90data(file_seed,self.bloch_basis)
             # number of R vectors, their indices, their degeneracy, number of
             # WFs, H(R)
-            mpi.report("... done: %d R vectors, %d WFs found" % (nr, nw))
+            mpi.report("\n... done: %d R vectors, %d WFs found" % (nr, nw))
 
             if isp == 0:
                 # set or check some quantities that must be the same for both
@@ -462,7 +462,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         except IOError:
             mpi.report("The file %s could not be read!" % hr_filename)
 
-        mpi.report('reading {:20}...{}'.format(hr_filename,hr_data[0]))
+        mpi.report('reading {:20}...{}'.format(hr_filename,hr_data[0].strip('\n')))
 
         try:
             # reads number of Wannier functions per spin
@@ -481,9 +481,11 @@ class Wannier90Converter(ct_tools.ConverterTools):
                 nu_k, num_wf_u, _ = map(int, u_data[1].split())
                 if num_wf_u is not num_wf:
                     raise ValueError('#WFs must be identical for *_u.mat and *_hr.dat')
-            mpi.report('reading {:20}...{}'.format(u_filename,u_data[0]))                                                     
+            mpi.report('reading {:20}...{}'.format(u_filename,u_data[0].strip('\n')))
             del u_data[:2]
             
+            mpi.report('Writing h5 archive in projector formalism: H(k) defined in KS Bloch basis')
+
             try:
                 # read 'seedname_u_dis.mat'
                 udis_filename = wannier_seed + '_u_dis.mat'
@@ -496,18 +498,24 @@ class Wannier90Converter(ct_tools.ConverterTools):
                     nudis_k, num_wf_udis, num_bnd = map(int, udis_data[1].split())
                     if num_wf_udis is not num_wf_u:
                         raise ValueError('#WFs must be identical for *_u.mat and *_u_dis.mat')
-                mpi.report('reading {:20}...{}'.format(udis_filename,udis_data[0]))
+                mpi.report('Found {:22}...{}'.format(udis_filename,udis_data[0].strip('\n')))
                 del udis_data[:2]
                 disentangle = True
 
-                # read Kohn-Sham eigenvalues from 'seedname.eig'
-                with open(band_filename,'r') as band_file:
-                    band_data = numpy.genfromtxt(band_file)
-                mpi.report('reading {:20}.'.format(band_filename))
+                try:
+                    # read Kohn-Sham eigenvalues from 'seedname.eig'
+                    with open(band_filename,'r') as band_file:
+                        band_data = numpy.genfromtxt(band_file)
+                    mpi.report('and {} (required for entangled bands).'.format(band_filename))
+                except IOError:
+                    mpi.report('File {} not found.'.format(band_filename))
+                    mpi.report('Please provide it in case of entangled bands or remove {}.'.format(udis_filename))
+                    mpi.MPI.COMM_WORLD.Abort(1)
     
-            except:
+            except IOError:
                 disentangle = False
-                mpi.report('Files {} and/or {} missing, assuming an isolated set of bands.'.format(udis_filename,band_filename))
+                mpi.report('WARNING: Files {} and/or {} missing.'.format(udis_filename,band_filename))
+                mpi.report('Assuming an isolated set of bands. Check if this is what you want!')
 
 
 
