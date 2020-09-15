@@ -442,8 +442,12 @@ class Wannier90Converter(ConverterTools):
             number of Wannier functions found
         h_of_r : list of numpy.array
             <w_i|H(R)|w_j> = Hamilonian matrix elements in the Wannier basis
-        u_mat : list of numpy.array
-            U_mn^k = unitary matrix elements that mixes the Kohn-Sham states
+        u_mat : numpy.array
+            U_mn^k = unitary matrix elements which mix the Kohn-Sham states
+        udis_mat : numpy.array
+            U^dis(k) = rectangular matrix used for entangled bands
+        band_mat : numpy.array
+            \epsilon_nk = Kohn-Sham eigenvalues (in eV) needed for entangled bands
 
         """
 
