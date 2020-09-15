@@ -48,12 +48,7 @@
 import numpy
 import math
 from h5 import *
-#from .converter_tools import *
-import importlib.util
-ct = importlib.util.spec_from_file_location("*", "/work/work/codes/triqs/dft_tools/python/triqs_dft_tools/converters/converter_tools.py")
-ct_tools = importlib.util.module_from_spec(ct)
-ct.loader.exec_module(ct_tools)
-#from /work/work/codes/triqs/dft_tools/python/triqs_dft_tools/converters/converter_tools import *
+from .converter_tools import *
 from itertools import product
 import os.path
 import triqs.utility.mpi as mpi
