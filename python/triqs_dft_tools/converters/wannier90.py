@@ -360,8 +360,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         # Third, initialise the projectors
         k_dep_projection = 0   # at the moment not really used, but might get important
         proj_mat = numpy.zeros([self.n_k, n_spin, n_corr_shells, max(
-            #[crsh['dim'] for crsh in corr_shells]), numpy.max(n_orbitals)], numpy.complex_)
-            [crsh['dim'] for crsh in corr_shells]), n_bnd_max], numpy.complex_)
+            [crsh['dim'] for crsh in corr_shells]), numpy.max(n_orbitals)], numpy.complex_)
         iorb = 0
         # Projectors simply consist in identity matrix blocks selecting those MLWFs that
         # correspond to the specific correlated shell indexed by icrsh.
@@ -372,34 +371,36 @@ class Wannier90Converter(ct_tools.ConverterTools):
         # file and that the ordering of MLWFs matches the corr_shell info from
         # the input.
         for isp in range(n_spin):
-            u_temp = numpy.einsum('abc,acd->abd',udismat_full[isp],umat_full[isp])
-            u_temp = numpy.transpose(u_temp.conj(),(0,2,1))
+            # now combine udismat and umat
+            u_total = numpy.einsum('abc,acd->abd',udismat_full[isp],umat_full[isp])
+            # transpose and write into proj_mat
+            u_temp = numpy.transpose(u_total.conj(),(0,2,1))
             for icrsh in range(n_corr_shells):
                 dim = corr_shells[icrsh]['dim']
+                # previous version
                 #proj_mat[:, :, icrsh, 0:norb, iorb:iorb +
                 #         norb] = numpy.identity(norb, numpy.complex_)
                 proj_mat[:, isp, icrsh, 0:dim, :] = u_temp[:,iorb:iorb+dim,:]
                 iorb += dim
 
         # Then, compute the hoppings in reciprocal space
-        hopping = numpy.zeros([self.n_k, n_spin, n_bnd_max, n_bnd_max], numpy.complex_)
+        hopping = numpy.zeros([self.n_k, n_spin, numpy.max(n_orbitals), numpy.max(n_orbitals)], numpy.complex_)
         for isp in range(n_spin):
             # if disentanglement is True, use Kohn-Sham eigenvalues as hamk
             if n_bnd_max > self.nwfs:
                 # diagonal Kohn-Sham bands
                 hamk = [numpy.eye((n_bnd_max), dtype=numpy.complex_) for ik in range(self.n_k)]
                 for ik in range(self.n_k):
-                    hamk[ik][:,:] = numpy.eye(n_bnd_max) * band_mat[ik,:,2]
-            # else use fourier transform of H(R)
+                    hamk[ik][:,:] = numpy.eye(numpy.max(n_orbitals)) * band_mat[ik,:,2]
+            # else for an isolated set of bands use fourier transform of H(R)
             else:
                 # make Fourier transform H(R) -> H(k) : it can be done one spin at a time
                 hamk = self.fourier_ham(self.nwfs, hamr_full[isp])
                 # get upfolded hamk for usage with projectors
-                if self.bloch_basis == True:
+                if self.bloch_basis:
                     for ik in range(self.n_k):
-                        hamk[ik][:,:] = numpy.dot(proj_mat[ik,isp,:,:,:].reshape(self.nwfs,n_bnd_max).T.conj(), 
-                                                       numpy.dot(hamk[ik][:, :],
-                                                                 proj_mat[ik,isp,:,:,:].reshape(self.nwfs,n_bnd_max)))
+                        projmat = proj_mat[ik,isp,:,:,:].reshape(self.nwfs,numpy.max(n_orbitals))
+                        hamk[ik][:,:] = numpy.dot(projmat.T.conj(),numpy.dot(hamk[ik][:, :],projmat))
             # finally write hamk into hoppings
             for ik in range(self.n_k):
                 hopping[ik, isp, :, :] = hamk[ik][:, :] * energy_unit
@@ -560,12 +561,14 @@ class Wannier90Converter(ct_tools.ConverterTools):
         except ValueError:
             mpi.report("Wrong data or structure in file %s" % hr_filename)
 
-        if bloch_basis == True:
+        # first, get the input for u_mat
+        if bloch_basis:
             # initiate U matrices and fill from file "seedname_u.mat"
             u_mat = numpy.zeros([nu_k, num_wf, num_wf], numpy.complex_)
             for ik in range(nu_k):
                 k_block = [line.split() for line in u_data[ik*(num_wf*num_wf+2)+1:(num_wf*num_wf+2)*(ik+1)]]
-                kpt, vals = k_block[0], numpy.array(k_block[1:],dtype=float)
+                # skip first line (k-point)
+                vals = numpy.array(k_block[1:],dtype=float)
                 u_of_k = numpy.apply_along_axis(lambda x: complex(x[0],x[1]), 1, vals)
                 u_mat[ik,:,:] = u_of_k.reshape(num_wf,num_wf,order='F')
 
@@ -575,30 +578,19 @@ class Wannier90Converter(ct_tools.ConverterTools):
             for ik in range(self.n_k):
                 u_mat[ik,:,:] = numpy.identity(num_wf,numpy.complex_)
         
-        if bloch_basis == True and disentangle == True: 
+        # now, check what is needed in the case of disentanglement
+        if bloch_basis and disentangle: 
             #initiate U disentanglement matrices and fill from file "seedname_u_dis.mat"
             udis_mat = numpy.zeros([nudis_k, num_bnd, num_wf], numpy.complex_)
             for ik in range(nudis_k):
                 k_block = [line.split() for line in udis_data[ik*(num_wf*num_bnd+2)+1:(num_wf*num_bnd+2)*(ik+1)]]
-                kpt, vals = k_block[0], numpy.array(k_block[1:],dtype=float)
+                # skip first line (k-point)
+                vals = numpy.array(k_block[1:],dtype=float)
                 udis_of_k = numpy.apply_along_axis(lambda x: complex(x[0],x[1]), 1, vals)
                 udis_mat[ik,:,:] = udis_of_k.reshape(num_bnd,num_wf,order='F')
             
             # reshape band_data
             band_mat = band_data.reshape(nudis_k,num_bnd,3)
-
-            ##initiate band energies and fill from file "seedname_band.dat"
-            #print(band_data.shape)
-            #band_mat = band_data.reshape(nudis_k,14,3)
-            #for ik in range(nudis_k):
-            #    print(band_mat[ik,:,2])
-            #    exit()
-            #exit()
-            #band_mat = numpy.zeros([num_bnd, nudis_k])
-            #for ik in range(nudis_k):
-            #    k_block = numpy.array([line.split() for line in band_data[ik*num_bnd:num_bnd*(ik+1)]])
-            #    val = numpy.array(k_block[:,2],dtype=numpy.float)
-            #    band_mat[:,ik] = val
 
         else:
             # no disentanglement; fill udis_mat with identity
