@@ -80,7 +80,7 @@ class Wannier90Converter(ConverterTools):
             Type of rot_mat used
             Can be 'hloc_diag', 'wannier', 'none'
         bloch_basis : boolean, optional
-            Should the Hamiltonian be written in Bloch rathern than Wannier basis?
+            Should the Hamiltonian be written in Bloch rather than Wannier basis?
         """
 
         self._name = "Wannier90Converter"
@@ -220,6 +220,7 @@ class Wannier90Converter(ConverterTools):
         hamr_full = []
         umat_full = []
         udismat_full = []
+        bandmat_full = []
 
         # TODO: generalise to SP=1 (only partially done)
         rot_mat_time_inv = [0 for i in range(n_corr_shells)]
@@ -310,6 +311,7 @@ class Wannier90Converter(ConverterTools):
             hamr_full.append(hamr)
             umat_full.append(u_mat)
             udismat_full.append(udis_mat)
+            bandmat_full.append(band_mat)
             # FIXME: when do we actually need deepcopy()?
             # hamr_full.append(deepcopy(hamr))
 
@@ -386,7 +388,7 @@ class Wannier90Converter(ConverterTools):
                 # diagonal Kohn-Sham bands
                 hamk = [numpy.eye((n_bnd_max), dtype=numpy.complex_) for ik in range(self.n_k)]
                 for ik in range(self.n_k):
-                    hamk[ik][:,:] = numpy.eye(numpy.max(n_orbitals)) * band_mat[ik,:,2]
+                    hamk[ik][:,:] = numpy.eye(numpy.max(n_orbitals)) * bandmat_full[isp][ik,:,2]
             # else for an isolated set of bands use fourier transform of H(R)
             else:
                 # make Fourier transform H(R) -> H(k) : it can be done one spin at a time
