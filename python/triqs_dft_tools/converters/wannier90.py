@@ -53,7 +53,7 @@ from itertools import product
 import os.path
 import triqs.utility.mpi as mpi
 
-class Wannier90Converter(ct_tools.ConverterTools):
+class Wannier90Converter(ConverterTools):
     """
     Conversion from Wannier90 output to an hdf5 file that can be used as input for the SumkDFT class.
     """
@@ -107,7 +107,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
 
         # Checks if h5 file is there and repacks it if wanted:
         if (os.path.exists(self.hdf_file) and repacking):
-            ct_tools.ConverterTools.repack(self)
+            ConverterTools.repack(self)
 
     def convert_dft_input(self):
         """
@@ -127,7 +127,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
 
         # R is a generator : each R.Next() will return the next number in the
         # file
-        R = ct_tools.ConverterTools.read_fortran_file(
+        R = ConverterTools.read_fortran_file(
             self, self.inp_file, self.fortran_to_replace)
         shell_entries = ['atom', 'sort', 'l', 'dim']
         corr_shell_entries = ['atom', 'sort', 'l', 'dim', 'SO', 'irep']
@@ -186,7 +186,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
 
         # determine the number of inequivalent correlated shells and maps,
         # needed for further processing
-        n_inequiv_shells, corr_to_inequiv, inequiv_to_corr = ct_tools.ConverterTools.det_shell_equivalence(
+        n_inequiv_shells, corr_to_inequiv, inequiv_to_corr = ConverterTools.det_shell_equivalence(
             self, corr_shells)
         mpi.report("Number of inequivalent shells: %d" % n_inequiv_shells)
         mpi.report("Shell representatives: " + format(inequiv_to_corr))
