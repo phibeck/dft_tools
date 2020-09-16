@@ -291,7 +291,7 @@ class Wannier90Converter(ConverterTools):
                 # get second dimension of udis_mat which corresponds to number of bands in window
                 # n_bnd_max corresponds to numpy.max(n_orbitals)
                 n_bands_max = udis_mat.shape[1]
-                n_orbitals = numpy.fill([self.n_k, n_spin], n_bands_max)
+                n_orbitals = numpy.full([self.n_k, n_spin], n_bands_max)
             else:
                 # consistency check between the _up and _down file contents
                 if nr != self.nrpt:
@@ -412,9 +412,6 @@ class Wannier90Converter(ConverterTools):
         ----------
         wannier_seed : string
             seedname to read H(R) file produced by Wannier90 (usually seedname_hr.dat)
-        bloch_basis : boolean, optional
-            if true, additional files are read: KS Eigenvalues (usually seedname.eig) and U matrices
-            (usually seedname_u.mat and seedname_u_dis.mat for disentanglement)
 
         Returns
         -------
@@ -760,8 +757,6 @@ class Wannier90Converter(ConverterTools):
 
         Parameters
         ----------
-        norb : integer
-            number of orbitals
         h_of_r : list of numpy.array[norb,norb]
             Hamiltonian H(R) in Wannier basis
 
