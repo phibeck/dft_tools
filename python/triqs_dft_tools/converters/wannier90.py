@@ -24,7 +24,8 @@
 #  Wannier90 to HDF5 converter for the SumkDFT class of dfttools/TRIQS;
 #
 #   written by Gabriele Sclauzero (Materials Theory, ETH Zurich), Dec 2015 -- Jan 2016,
-#   and updated by Maximilian Merkel (Materials Theory, ETH Zurich), Aug 2020,
+#   updated by Maximilian Merkel (Materials Theory, ETH Zurich), Aug 2020,
+#   and by Sophie Beck (Materials Theory, ETH Zurich), Sep 2020,
 #   under the supervision of Claude Ederer (Materials Theory).
 #   Partially based on previous work by K. Dymkovski and the DFT_tools/TRIQS team.
 #
@@ -414,7 +415,7 @@ class Wannier90Converter(ConverterTools):
             things_to_save = ['energy_unit', 'n_k', 'k_dep_projection', 'SP', 'SO', 'charge_below', 'density_required',
                           'symm_op', 'n_shells', 'shells', 'n_corr_shells', 'corr_shells', 'use_rotations', 'rot_mat',
                           'rot_mat_time_inv', 'n_reps', 'dim_reps', 'T', 'n_orbitals', 'proj_mat', 'bz_weights', 'hopping',
-                          'n_inequiv_shells', 'corr_to_inequiv', 'inequiv_to_corr','kpt_weights','kpts']
+                          'n_inequiv_shells', 'corr_to_inequiv', 'inequiv_to_corr', 'kpt_weights', 'kpts']
             for it in things_to_save:
                 ar[self.dft_subgrp][it] = locals()[it]
 
@@ -445,7 +446,7 @@ class Wannier90Converter(ConverterTools):
         u_mat : numpy.array
             U_mn^k = unitary matrix elements which mix the Kohn-Sham states
         udis_mat : numpy.array
-            U^dis(k) = rectangular matrix used for entangled bands
+            U^dis(k) = rectangular matrix for entangled bands
         band_mat : numpy.array
             \epsilon_nk = Kohn-Sham eigenvalues (in eV) needed for entangled bands
 
