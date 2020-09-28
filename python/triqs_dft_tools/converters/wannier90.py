@@ -60,8 +60,8 @@ class Wannier90Converter(ConverterTools):
     """
 
     def __init__(self, seedname, hdf_filename=None, dft_subgrp='dft_input',
-                 symmcorr_subgrp='dft_symmcorr_input', repacking=False,
-                 rot_mat_type='hloc_diag', bloch_basis=False):
+                 symmcorr_subgrp='dft_symmcorr_input', misc_subgrp='dft_misc_input',
+                 repacking=False, rot_mat_type='hloc_diag', bloch_basis=False):
         """
         Initialise the class.
 
@@ -75,6 +75,8 @@ class Wannier90Converter(ConverterTools):
             Name of subgroup storing necessary DFT data
         symmcorr_subgrp : string, optional
             Name of subgroup storing correlated-shell symmetry data
+        misc_subgrp : string, optional
+            Name of subgroup storing miscellaneous DFT data.
         repacking : boolean, optional
             Does the hdf5 archive need to be repacked to save space?
         rot_mat_type : string, optional
@@ -96,6 +98,7 @@ class Wannier90Converter(ConverterTools):
         self.w90_seed = seedname
         self.dft_subgrp = dft_subgrp
         self.symmcorr_subgrp = symmcorr_subgrp
+        self.misc_subgrp = misc_subgrp
         self.fortran_to_replace = {'D': 'E'}
         # threshold below which matrix elements from wannier90 should be
         # considered equal
@@ -403,6 +406,13 @@ class Wannier90Converter(ConverterTools):
                           'n_inequiv_shells', 'corr_to_inequiv', 'inequiv_to_corr', 'kpt_weights', 'kpts']
             for it in things_to_save:
                 ar[self.dft_subgrp][it] = locals()[it]
+
+            if self.bloch_basis:
+                f_weights, band_window = self.convert_misc_input(self.w90_seed + '.nscf.out', n_spin, n_orbitals)
+                # Store Fermi weights to 'dft_misc_input'
+                if not (self.misc_subgrp in ar): ar.create_group(self.misc_subgrp)
+                ar[self.misc_subgrp]['dft_fermi_weights'] = f_weights
+                ar[self.misc_subgrp]['band_window'] = band_window
 
     def read_wannier90data(self, wannier_seed="wannier"):
         """
@@ -778,3 +788,54 @@ class Wannier90Converter(ConverterTools):
             h_of_k[ik][:, :] += factor * h_of_r[ir][:, :]
 
         return h_of_k
+
+    def convert_misc_input(self, output_file, n_spin, n_orbitals):
+        """
+        Reads input from DFT code calculations to get occupations
+
+        Parameters
+        ----------
+        output_file : string
+            filename of DFT output file containing occupation data
+        n_spin : int
+            SP + 1 - SO
+        n_orbitals : numpy.array[self.n_k, n_spin]
+            number of orbitals in window used in projector formalism
+
+        Returns
+        -------
+        fermi_weights : numpy.array[self.n_k, n_spin ,n_orbitals]
+            occupations from DFT calculation
+        band_window : numpy.array[self.n_k, n_spin ,n_orbitals]
+            band indices of correlated subspace
+
+        """
+        
+        # Read only from the master node
+        if not (mpi.is_master_node()):
+            return
+        
+        # initiate f_weights and fill from file "output_file"
+        with open(output_file,'r') as out_file:
+            out_data = out_file.readlines()
+            for ct,line in enumerate(out_data):
+                if line == '     End of band structure calculation\n':
+                    break
+        del out_data[:ct+2]
+
+        # number of KS states
+        n_ks = 25
+        f_weights = numpy.zeros([self.n_k, n_spin, numpy.max(n_orbitals)], dtype=complex)
+        band_window = [numpy.zeros((self.n_k, 2), dtype=int) for isp in range(n_spin)]
+        n_block = int(2*numpy.ceil(n_ks/8)+5)
+        
+        assert n_spin == 1, 'spin-polarized not implemented'
+
+        for ik in range(self.n_k):
+            k_block = [line.split() for line in out_data[ik*n_block+2:ik*n_block+n_block-1]]
+            occs = k_block[int(len(k_block)/2)+1:]
+            flatten = lambda l: [float(item) for sublist in l for item in sublist]
+            band_window[n_spin-1][ik] = n_ks-numpy.max(n_orbitals),n_ks
+            f_weights[ik, n_spin-1] = flatten(occs)[band_window[n_spin-1][ik,0]:band_window[n_spin-1][ik,1]]
+
+        return f_weights, band_window
