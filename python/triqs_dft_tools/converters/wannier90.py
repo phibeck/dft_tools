@@ -102,7 +102,7 @@ class Wannier90Converter(ConverterTools):
         self.fortran_to_replace = {'D': 'E'}
         # threshold below which matrix elements from wannier90 should be
         # considered equal
-        self._w90zero = 2.e-6
+        self._w90zero = 2.e-4
         self.rot_mat_type = rot_mat_type
         self.bloch_basis = bloch_basis
         if self.rot_mat_type not in ('hloc_diag', 'wannier', 'none'):
@@ -819,23 +819,34 @@ class Wannier90Converter(ConverterTools):
         with open(output_file,'r') as out_file:
             out_data = out_file.readlines()
             for ct,line in enumerate(out_data):
-                if line == '     End of band structure calculation\n':
+                # read number of KS states
+                if 'number of Kohn-Sham states=' in line:
+                    n_ks = line.split()[-1]
+                # get occupations
+                elif line == '     End of band structure calculation\n':
                     break
+
+        assert 'k = ' in out_data[ct + 2], 'Cannot read occupations. Set verbosity = 'high' in {}'.format(output_file)
         del out_data[:ct+2]
 
-        # number of KS states
-        n_ks = 25
+        # initialize f_weigths and band_window
         f_weights = numpy.zeros([self.n_k, n_spin, numpy.max(n_orbitals)], dtype=complex)
         band_window = [numpy.zeros((self.n_k, 2), dtype=int) for isp in range(n_spin)]
+        # block size of eigenvalues + occupations per k-point
         n_block = int(2*numpy.ceil(n_ks/8)+5)
         
         assert n_spin == 1, 'spin-polarized not implemented'
 
         for ik in range(self.n_k):
+            # get data
             k_block = [line.split() for line in out_data[ik*n_block+2:ik*n_block+n_block-1]]
+            # second half corresponds to occupations
             occs = k_block[int(len(k_block)/2)+1:]
             flatten = lambda l: [float(item) for sublist in l for item in sublist]
-            band_window[n_spin-1][ik] = n_ks-numpy.max(n_orbitals),n_ks
+            # sets the band indices of bands to be included in the h5 archive
+            #band_window[n_spin-1][ik] = n_ks-numpy.max(n_orbitals),n_ks
+            #TODO
+            band_window[n_spin-1][ik] = 50,50+numpy.max(n_orbitals)
             f_weights[ik, n_spin-1] = flatten(occs)[band_window[n_spin-1][ik,0]:band_window[n_spin-1][ik,1]]
 
         return f_weights, band_window
