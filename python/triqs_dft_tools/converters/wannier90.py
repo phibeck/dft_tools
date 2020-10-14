@@ -408,7 +408,8 @@ class Wannier90Converter(ConverterTools):
                 ar[self.dft_subgrp][it] = locals()[it]
 
             if self.bloch_basis:
-                f_weights, band_window = self.convert_misc_input(self.w90_seed + '.nscf.out', n_spin, n_orbitals)
+                f_weights, band_window = self.convert_misc_input(self.w90_seed + '.nscf.out', self.w90_seed + '.nnkp',
+                                                                 n_spin, n_orbitals)
                 # Store Fermi weights to 'dft_misc_input'
                 if not (self.misc_subgrp in ar): ar.create_group(self.misc_subgrp)
                 ar[self.misc_subgrp]['dft_fermi_weights'] = f_weights
@@ -789,14 +790,16 @@ class Wannier90Converter(ConverterTools):
 
         return h_of_k
 
-    def convert_misc_input(self, output_file, n_spin, n_orbitals):
+    def convert_misc_input(self, out_filename, nnkp_filename, n_spin, n_orbitals):
         """
         Reads input from DFT code calculations to get occupations
 
         Parameters
         ----------
-        output_file : string
+        out_filename : string
             filename of DFT output file containing occupation data
+        nnkp_file : string
+            filename of Wannier postproc_setup run
         n_spin : int
             SP + 1 - SO
         n_orbitals : numpy.array[self.n_k, n_spin]
@@ -815,23 +818,45 @@ class Wannier90Converter(ConverterTools):
         if not (mpi.is_master_node()):
             return
         
-        # initiate f_weights and fill from file "output_file"
-        with open(output_file,'r') as out_file:
+        # initiate f_weights and fill from file "out_filename"
+        with open(out_filename,'r') as out_file:
             out_data = out_file.readlines()
             for ct,line in enumerate(out_data):
                 # read number of KS states
                 if 'number of Kohn-Sham states=' in line:
-                    n_ks = line.split()[-1]
+                    n_ks = int(line.split()[-1])
                 # get occupations
                 elif line == '     End of band structure calculation\n':
                     break
 
-        assert 'k = ' in out_data[ct + 2], 'Cannot read occupations. Set verbosity = 'high' in {}'.format(output_file)
+        assert 'k = ' in out_data[ct + 2], 'Cannot read occupations. Set verbosity = "high" in {}'.format(out_filename)
         del out_data[:ct+2]
+
+        # assume that all bands contribute, then remove from exclude_bands; python indexing
+        corr_bands = list(range(0,n_ks))
+        # read exlcude_bands from "seedname.nnkp" file
+        with open(nnkp_filename, 'r') as nnkp_file:
+            read = False
+            skip = False
+            for line in nnkp_file:
+                if line.strip() == 'begin exclude_bands':
+                    read = True
+                    # skip one more line that contains total number of excluded bands
+                    skip = True
+                    continue
+                elif line.strip() == 'end exclude_bands':
+                    read = False
+                    continue
+                elif skip:
+                    skip = False
+                    continue
+                elif read:
+                    # wannier index -1
+                    corr_bands.remove(int(line)-1)
 
         # initialize f_weigths and band_window
         f_weights = numpy.zeros([self.n_k, n_spin, numpy.max(n_orbitals)], dtype=complex)
-        band_window = [numpy.zeros((self.n_k, 2), dtype=int) for isp in range(n_spin)]
+        band_window = [numpy.zeros((self.n_k, numpy.max(n_orbitals)), dtype=int) for isp in range(n_spin)]
         # block size of eigenvalues + occupations per k-point
         n_block = int(2*numpy.ceil(n_ks/8)+5)
         
@@ -844,9 +869,7 @@ class Wannier90Converter(ConverterTools):
             occs = k_block[int(len(k_block)/2)+1:]
             flatten = lambda l: [float(item) for sublist in l for item in sublist]
             # sets the band indices of bands to be included in the h5 archive
-            #band_window[n_spin-1][ik] = n_ks-numpy.max(n_orbitals),n_ks
-            #TODO
-            band_window[n_spin-1][ik] = 50,50+numpy.max(n_orbitals)
-            f_weights[ik, n_spin-1] = flatten(occs)[band_window[n_spin-1][ik,0]:band_window[n_spin-1][ik,1]]
+            band_window[n_spin-1][ik] = numpy.array(corr_bands)
+            f_weights[ik, n_spin-1] = [flatten(occs)[band] for band in band_window[n_spin-1][ik]]
 
         return f_weights, band_window
