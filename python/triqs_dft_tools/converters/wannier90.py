@@ -152,6 +152,8 @@ class Wannier90Converter(ConverterTools):
             # and the data will be copied from corr_shells into shells (see below)
             # number of corr. shells (e.g. Fe d, Ce f) in the unit cell,
             n_corr_shells = int(next(R))
+            # flag for spin-orbit calculation
+            SO = int(next(R))
             # now read the information about the correlated shells (atom, sort,
             # l, dim, SO flag, irep):
             corr_shells = [{name: int(val) for name, val in zip(
@@ -177,16 +179,26 @@ class Wannier90Converter(ConverterTools):
             shells.append({key: corr_shells[ish].get(
                 key, None) for key in shell_entries})
         ###
-        SP = 0                          # NO spin-polarised calculations for now
-        SO = 0                          # NO spin-orbit calculation for now
+        #SO = [sh['SO'] for sh in corr_shells]
+        #SO = 0
+        SP = 1
+        #assert SP == 0, 'NO spin-polarised calculations for now'
+        #assert SO == 0, 'NO spin-orbit calculation for now'
         charge_below = 0                # total charge below energy window NOT used for now
         energy_unit = 1.0               # should be understood as eV units
         ###
         # this is more general
-        n_spin = SP + 1 - SO
+        n_spin_blocs = SP + 1 - SO
+        assert n_spin_blocs > 0, 'Input error, if SO=1, SP must be 1.' 
+
+        if SO == 1:
+            for shell_list in [shells, corr_shells]:
+                for entry in shell_list:
+                    entry['dim'] *= 2
+            #density_required *= 2
+
         dim_corr_shells = sum([sh['dim'] for sh in corr_shells])
-        mpi.report(
-            "Total number of WFs expected in the correlated shells: %d" % dim_corr_shells)
+        mpi.report('Total number of WFs expected in the correlated shells: {0:d}'.format(dim_corr_shells))
 
         # determine the number of inequivalent correlated shells and maps,
         # needed for further processing
@@ -231,11 +243,11 @@ class Wannier90Converter(ConverterTools):
 
         # Second, let's read the file containing the Hamiltonian in WF basis
         # produced by Wannier90
-        for isp in range(n_spin):
+        for isp in range(n_spin_blocs):
             # begin loop on isp
 
             # build filename according to wannier90 conventions
-            if SP == 1:
+            if SP == 1 and SO == 0:
                 mpi.report(
                     "Reading information for spin component n. %d" % isp)
                 file_seed = self.w90_seed + spin_w90name[isp]
@@ -292,9 +304,9 @@ class Wannier90Converter(ConverterTools):
                 # we assume spin up and spin down always have same total number
                 # of WFs
                 # get second dimension of udis_mat which corresponds to number of bands in window
-                # n_bnd_max corresponds to numpy.max(n_orbitals)
+                # n_bands_max corresponds to numpy.max(n_orbitals)
                 n_bands_max = udis_mat.shape[1]
-                n_orbitals = numpy.full([self.n_k, n_spin], n_bands_max)
+                n_orbitals = numpy.full([self.n_k, n_spin_blocs], n_bands_max)
             else:
                 # consistency check between the _up and _down file contents
                 if nr != self.nrpt:
@@ -350,7 +362,7 @@ class Wannier90Converter(ConverterTools):
 
         # Third, initialise the projectors
         k_dep_projection = 0   # at the moment not really used, but might get important
-        proj_mat = numpy.zeros([self.n_k, n_spin, n_corr_shells, max(
+        proj_mat = numpy.zeros([self.n_k, n_spin_blocs, n_corr_shells, max(
             [crsh['dim'] for crsh in corr_shells]), numpy.max(n_orbitals)], dtype=complex)
         iorb = 0
         # Projectors are either identity matrix blocks to use with Wannier basis
@@ -359,7 +371,7 @@ class Wannier90Converter(ConverterTools):
         # NOTE: we assume that the correlated orbitals appear at the beginning of the H(R)
         # file and that the ordering of MLWFs matches the corr_shell info from
         # the input.
-        for isp in range(n_spin):
+        for isp in range(n_spin_blocs):
             # now combine udismat and umat
             u_total = numpy.einsum('abc,acd->abd',udismat_full[isp],umat_full[isp])
             # transpose and write into proj_mat
@@ -370,8 +382,8 @@ class Wannier90Converter(ConverterTools):
                 iorb += dim
 
         # Then, compute the hoppings in reciprocal space
-        hopping = numpy.zeros([self.n_k, n_spin, numpy.max(n_orbitals), numpy.max(n_orbitals)], dtype=complex)
-        for isp in range(n_spin):
+        hopping = numpy.zeros([self.n_k, n_spin_blocs, numpy.max(n_orbitals), numpy.max(n_orbitals)], dtype=complex)
+        for isp in range(n_spin_blocs):
             # if disentanglement is True, use Kohn-Sham eigenvalues as hamk
             if n_bands_max > self.nwfs:
                 # diagonal Kohn-Sham bands
@@ -409,7 +421,7 @@ class Wannier90Converter(ConverterTools):
 
             if self.bloch_basis:
                 f_weights, band_window = self.convert_misc_input(self.w90_seed + '.nscf.out', self.w90_seed + '.nnkp',
-                                                                 n_spin, n_orbitals)
+                                                                 n_spin_blocs, n_orbitals)
                 # Store Fermi weights to 'dft_misc_input'
                 if not (self.misc_subgrp in ar): ar.create_group(self.misc_subgrp)
                 ar[self.misc_subgrp]['dft_fermi_weights'] = f_weights
@@ -503,9 +515,9 @@ class Wannier90Converter(ConverterTools):
                 del udis_data[:2]
                 
                 # read Kohn-Sham eigenvalues from 'seedname.eig'
-                mpi.report('and {} (required for entangled bands).'.format(band_filename))
                 with open(band_filename,'r') as band_file:
                     band_data = numpy.genfromtxt(band_file)
+                mpi.report('and {} (required for entangled bands).'.format(band_filename))
             
 
         # allocate arrays to save the R vector indexes and degeneracies and the
@@ -790,7 +802,7 @@ class Wannier90Converter(ConverterTools):
 
         return h_of_k
 
-    def convert_misc_input(self, out_filename, nnkp_filename, n_spin, n_orbitals):
+    def convert_misc_input(self, out_filename, nnkp_filename, n_spin_blocs, n_orbitals):
         """
         Reads input from DFT code calculations to get occupations
 
@@ -800,16 +812,16 @@ class Wannier90Converter(ConverterTools):
             filename of DFT output file containing occupation data
         nnkp_file : string
             filename of Wannier postproc_setup run
-        n_spin : int
+        n_spin_blocs : int
             SP + 1 - SO
-        n_orbitals : numpy.array[self.n_k, n_spin]
+        n_orbitals : numpy.array[self.n_k, n_spin_blocs]
             number of orbitals in window used in projector formalism
 
         Returns
         -------
-        fermi_weights : numpy.array[self.n_k, n_spin ,n_orbitals]
+        fermi_weights : numpy.array[self.n_k, n_spin_blocs ,n_orbitals]
             occupations from DFT calculation
-        band_window : numpy.array[self.n_k, n_spin ,n_orbitals]
+        band_window : numpy.array[self.n_k, n_spin_blocs ,n_orbitals]
             band indices of correlated subspace
 
         """
@@ -855,12 +867,12 @@ class Wannier90Converter(ConverterTools):
                     corr_bands.remove(int(line)-1)
 
         # initialize f_weigths and band_window
-        f_weights = numpy.zeros([self.n_k, n_spin, numpy.max(n_orbitals)], dtype=complex)
-        band_window = [numpy.zeros((self.n_k, numpy.max(n_orbitals)), dtype=int) for isp in range(n_spin)]
+        f_weights = numpy.zeros([self.n_k, n_spin_blocs, numpy.max(n_orbitals)], dtype=complex)
+        band_window = [numpy.zeros((self.n_k, numpy.max(n_orbitals)), dtype=int) for isp in range(n_spin_blocs)]
         # block size of eigenvalues + occupations per k-point
         n_block = int(2*numpy.ceil(n_ks/8)+5)
         
-        assert n_spin == 1, 'spin-polarized not implemented'
+        assert n_spin_blocs == 1, 'spin-polarized not implemented'
 
         for ik in range(self.n_k):
             # get data
@@ -869,7 +881,7 @@ class Wannier90Converter(ConverterTools):
             occs = k_block[int(len(k_block)/2)+1:]
             flatten = lambda l: [float(item) for sublist in l for item in sublist]
             # sets the band indices of bands to be included in the h5 archive
-            band_window[n_spin-1][ik] = numpy.array(corr_bands)
-            f_weights[ik, n_spin-1] = [flatten(occs)[band] for band in band_window[n_spin-1][ik]]
+            band_window[n_spin_blocs-1][ik] = numpy.array(corr_bands)
+            f_weights[ik, n_spin_blocs-1] = [flatten(occs)[band] for band in band_window[n_spin_blocs-1][ik]]
 
         return f_weights, band_window
