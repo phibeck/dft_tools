@@ -120,7 +120,7 @@ class Wannier90Converter(ConverterTools):
         - dft_subgrp
         - symmcorr_subgrp
 
-        in the hdf5 archive. 
+        in the hdf5 archive.
 
         """
 
@@ -152,12 +152,11 @@ class Wannier90Converter(ConverterTools):
             # and the data will be copied from corr_shells into shells (see below)
             # number of corr. shells (e.g. Fe d, Ce f) in the unit cell,
             n_corr_shells = int(next(R))
-            # flag for spin-orbit calculation
-            SO = int(next(R))
             # now read the information about the correlated shells (atom, sort,
             # l, dim, SO flag, irep):
             corr_shells = [{name: int(val) for name, val in zip(
                 corr_shell_entries, R)} for icrsh in range(n_corr_shells)]
+
             try:
                 self.fermi_energy = float(next(R))
             except:
@@ -178,18 +177,24 @@ class Wannier90Converter(ConverterTools):
         for ish in range(n_shells):
             shells.append({key: corr_shells[ish].get(
                 key, None) for key in shell_entries})
-        ###
-        #SO = [sh['SO'] for sh in corr_shells]
-        #SO = 0
-        SP = 1
-        #assert SP == 0, 'NO spin-polarised calculations for now'
-        #assert SO == 0, 'NO spin-orbit calculation for now'
+
+        # Determine if any shell requires SO
+        if any([corr_shell['SO']==1 for corr_shell in corr_shells]):
+            SO = 1
+            SP = 1
+            print('Spin-orbit interaction turned on')
+        else:
+            SO = 0
+            SP = 0
+        # Only one block supported - either non-spin-polarized or spin-orbit coupled
+        assert SP == SO, 'Spin-polarized calculations not implemented'
+
         charge_below = 0                # total charge below energy window NOT used for now
         energy_unit = 1.0               # should be understood as eV units
-        ###
+
         # this is more general
         n_spin_blocs = SP + 1 - SO
-        assert n_spin_blocs > 0, 'Input error, if SO=1, SP must be 1.' 
+        assert n_spin_blocs > 0, 'Input error, if SO=1, SP must be 1.'
 
         if SO == 1:
             for shell_list in [shells, corr_shells]:
@@ -403,6 +408,19 @@ class Wannier90Converter(ConverterTools):
             for ik in range(self.n_k):
                 hopping[ik, isp] = hamk[ik] * energy_unit
 
+        if self.bloch_basis:
+            if os.path.isfile(self.w90_seed + '.nscf.out'):
+                fermi_weight_file = self.w90_seed + '.nscf.out'
+                print('Reading DFT band occupations from Quantum Espresso output {}'.format(fermi_weight_file))
+            elif os.path.isfile('OUTCAR'):
+                fermi_weight_file = 'OUTCAR'
+                print('Reading DFT band occupations from Vasp output {}'.format(fermi_weight_file))
+
+            f_weights, band_window = self.convert_misc_input(fermi_weight_file, self.w90_seed + '.nnkp',
+                                                             n_spin_blocs, n_orbitals)
+            # Get density from k-point weighted average and sum over all spins and bands
+            density_required = numpy.sum(f_weights.T * kpt_weights)
+            print('Overwriting required density with DFT result {:.5f}'.format(density_required))
 
         # Finally, save all required data into the HDF archive:
         # use_rotations is supposed to be an int = 0, 1, no bool
@@ -420,10 +438,9 @@ class Wannier90Converter(ConverterTools):
                 ar[self.dft_subgrp][it] = locals()[it]
 
             if self.bloch_basis:
-                f_weights, band_window = self.convert_misc_input(self.w90_seed + '.nscf.out', self.w90_seed + '.nnkp',
-                                                                 n_spin_blocs, n_orbitals)
                 # Store Fermi weights to 'dft_misc_input'
-                if not (self.misc_subgrp in ar): ar.create_group(self.misc_subgrp)
+                if not (self.misc_subgrp in ar):
+                    ar.create_group(self.misc_subgrp)
                 ar[self.misc_subgrp]['dft_fermi_weights'] = f_weights
                 ar[self.misc_subgrp]['band_window'] = band_window
 
@@ -461,7 +478,7 @@ class Wannier90Converter(ConverterTools):
         if not (mpi.is_master_node()):
             return
 
-        hr_filename = wannier_seed + '_hr.dat' 
+        hr_filename = wannier_seed + '_hr.dat'
         try:
             with open(hr_filename, "r") as hr_filedesc:
                 hr_data = hr_filedesc.readlines()
@@ -489,7 +506,7 @@ class Wannier90Converter(ConverterTools):
                 raise ValueError('#WFs must be identical for *_u.mat and *_hr.dat')
             mpi.report('reading {:20}...{}'.format(u_filename,u_data[0].strip('\n')))
             del u_data[:2]
-            
+
             mpi.report('Writing h5 archive in projector formalism: H(k) defined in KS Bloch basis')
 
             try:
@@ -513,12 +530,12 @@ class Wannier90Converter(ConverterTools):
                     raise ValueError('#WFs must be identical for *_u.mat and *_u_dis.mat')
                 mpi.report('Found {:22}...{}'.format(udis_filename,udis_data[0].strip('\n')))
                 del udis_data[:2]
-                
+
                 # read Kohn-Sham eigenvalues from 'seedname.eig'
                 with open(band_filename,'r') as band_file:
                     band_data = numpy.genfromtxt(band_file)
                 mpi.report('and {} (required for entangled bands).'.format(band_filename))
-            
+
 
         # allocate arrays to save the R vector indexes and degeneracies and the
         # Hamiltonian
@@ -586,9 +603,9 @@ class Wannier90Converter(ConverterTools):
             u_mat = numpy.zeros([self.n_k, num_wf, num_wf], dtype=complex)
             for ik in range(self.n_k):
                 u_mat[ik,:,:] = numpy.identity(num_wf,dtype=complex)
-        
+
         # now, check what is needed in the case of disentanglement
-        if self.bloch_basis and disentangle: 
+        if self.bloch_basis and disentangle:
             #initiate U disentanglement matrices and fill from file "seedname_u_dis.mat"
             udis_mat = numpy.zeros([nudis_k, num_bnd, num_wf], dtype=complex)
             for ik in range(nudis_k):
@@ -597,7 +614,7 @@ class Wannier90Converter(ConverterTools):
                 vals = numpy.array(k_block[1:],dtype=float)
                 udis_of_k = vals[:, 0] + 1j * vals[:, 1]
                 udis_mat[ik,:,:] = udis_of_k.reshape(num_bnd,num_wf,order='F')
-            
+
             # reshape band_data
             band_mat = band_data.reshape(nudis_k,num_bnd,3)
 
@@ -825,27 +842,82 @@ class Wannier90Converter(ConverterTools):
             band indices of correlated subspace
 
         """
-        
+
         # Read only from the master node
         if not (mpi.is_master_node()):
             return
-        
-        # initiate f_weights and fill from file "out_filename"
-        with open(out_filename,'r') as out_file:
-            out_data = out_file.readlines()
-            for ct,line in enumerate(out_data):
-                # read number of KS states
-                if 'number of Kohn-Sham states=' in line:
-                    n_ks = int(line.split()[-1])
-                # get occupations
-                elif line == '     End of band structure calculation\n':
+
+        assert n_spin_blocs == 1, 'spin-polarized not implemented'
+        assert 'nscf.out' in out_filename or out_filename == 'OUTCAR'
+
+        occupations = []
+        if 'nscf.out' in out_filename:
+            occupations = []
+            with open(out_filename,'r') as out_file:
+                out_data = out_file.readlines()
+                for ct, line in enumerate(out_data):
+                    # read number of KS states
+                    if 'number of Kohn-Sham states=' in line:
+                        n_ks = int(line.split()[-1])
+                    # get occupations
+                    elif line.strip() == 'End of band structure calculation':
+                        break
+
+            assert 'k = ' in out_data[ct + 2], 'Cannot read occupations. Set verbosity = "high" in {}'.format(out_filename)
+            out_data = out_data[ct+2:]
+
+            # block size of eigenvalues + occupations per k-point
+            n_block = int(2*numpy.ceil(n_ks/8)+5)
+
+            for ik in range(self.n_k):
+                # get data
+                k_block = [line.split() for line in out_data[ik*n_block+2:ik*n_block+n_block-1]]
+                # second half corresponds to occupations
+                occs = k_block[int(len(k_block)/2)+1:]
+                flattened_occs = [float(item) for sublist in occs for item in sublist]
+                occupations.append(flattened_occs)
+        else:
+            # Reads OUTCAR
+            # TODO: test when NWRITE < 2, where should I print a warning?
+            with open(out_filename, 'r') as file:
+                outcar_data = file.readlines()
+            # Reads number of Kohn-Sham bands from OUTCAR
+            for line in outcar_data:
+                if 'NBANDS' in line:
+                    n_ks = int(line[line.rfind('=')+1:])
                     break
 
-        assert 'k = ' in out_data[ct + 2], 'Cannot read occupations. Set verbosity = "high" in {}'.format(out_filename)
-        del out_data[:ct+2]
+            # Finds beginning of last iteration and deletes data before
+            for i, line in enumerate(reversed(outcar_data)):
+                if 'Iteration' in line:
+                    break
+            outcar_data = outcar_data[-i:]
+
+            start_read = False
+            for line in outcar_data:
+                if 'k-point' in line:
+                    start_read = True
+                    k_index = int(line[line.find('k-point')+7:line.find(':')])
+                    assert k_index == len(occupations)+1
+                    occupations.append([])
+                    continue
+
+                if not start_read:
+                    continue
+
+                if 'occupation' in line or line.strip() == '':
+                    continue
+
+                if '-------------------' in line:
+                    break
+
+                line_content = [x for x in line.split() if x]
+                band_index = int(line_content[0])
+                assert band_index == len(occupations[-1])+1
+                occupations[-1].append(float(line_content[2]))
 
         # assume that all bands contribute, then remove from exclude_bands; python indexing
-        corr_bands = list(range(0,n_ks))
+        corr_bands = list(range(n_ks))
         # read exlcude_bands from "seedname.nnkp" file
         with open(nnkp_filename, 'r') as nnkp_file:
             read = False
@@ -866,22 +938,16 @@ class Wannier90Converter(ConverterTools):
                     # wannier index -1
                     corr_bands.remove(int(line)-1)
 
-        # initialize f_weigths and band_window
-        f_weights = numpy.zeros([self.n_k, n_spin_blocs, numpy.max(n_orbitals)], dtype=complex)
-        band_window = [numpy.zeros((self.n_k, numpy.max(n_orbitals)), dtype=int) for isp in range(n_spin_blocs)]
-        # block size of eigenvalues + occupations per k-point
-        n_block = int(2*numpy.ceil(n_ks/8)+5)
-        
-        assert n_spin_blocs == 1, 'spin-polarized not implemented'
+        # For now, it is only supported to exclude the lowest and highest bands
+        # If bands in the middle are supposed to be excluded, this doesn't work with the band_window
+        #     We'd need to manually add rows of zeros to the projectors
+        if numpy.any(numpy.diff(corr_bands) != 1):
+            raise NotImplementedError('Can only exclude the lowest or highest bands')
+        band_window = numpy.array([[(min(corr_bands), max(corr_bands))]*self.n_k]*n_spin_blocs)
 
-        for ik in range(self.n_k):
-            # get data
-            k_block = [line.split() for line in out_data[ik*n_block+2:ik*n_block+n_block-1]]
-            # second half corresponds to occupations
-            occs = k_block[int(len(k_block)/2)+1:]
-            flatten = lambda l: [float(item) for sublist in l for item in sublist]
-            # sets the band indices of bands to be included in the h5 archive
-            band_window[n_spin_blocs-1][ik] = numpy.array(corr_bands)
-            f_weights[ik, n_spin_blocs-1] = [flatten(occs)[band] for band in band_window[n_spin_blocs-1][ik]]
+        included_occupations = numpy.array(occupations)[:, corr_bands]
+        # Adds spin dimension without changing the array
+        f_weights = included_occupations.reshape(included_occupations.shape[0], 1,
+                                                 included_occupations.shape[1])
 
         return f_weights, band_window
