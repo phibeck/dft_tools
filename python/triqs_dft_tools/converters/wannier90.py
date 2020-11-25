@@ -872,10 +872,6 @@ class Wannier90Converter(ConverterTools):
         if 'nscf.out' in out_filename:
             occupations = []
             with open(out_filename,'r') as out_file:
-                # TODO: read in fermi energy and total number of electrons from nscf.out
-                # (search for "number of electrons" and "the Fermi energy is")
-                fermi_energy = 0
-
                 out_data = out_file.readlines()
             # Reads number of Kohn-Sham states and total number of electrons
             for line in out_data:
