@@ -48,10 +48,11 @@
 
 import numpy
 import math
+import os.path
+from itertools import product
+
 from h5 import HDFArchive
 from .converter_tools import ConverterTools
-from itertools import product
-import os.path
 import triqs.utility.mpi as mpi
 
 class Wannier90Converter(ConverterTools):
@@ -205,17 +206,6 @@ class Wannier90Converter(ConverterTools):
         dim_corr_shells = sum([sh['dim'] for sh in corr_shells])
         mpi.report('Total number of WFs expected in the correlated shells: {0:d}'.format(dim_corr_shells))
 
-        # determine the number of inequivalent correlated shells and maps,
-        # needed for further processing
-        n_inequiv_shells, corr_to_inequiv, inequiv_to_corr = ConverterTools.det_shell_equivalence(
-            self, corr_shells)
-        mpi.report("Number of inequivalent shells: %d" % n_inequiv_shells)
-        mpi.report("Shell representatives: " + format(inequiv_to_corr))
-        shells_map = [inequiv_to_corr[corr_to_inequiv[ish]]
-                      for ish in range(n_corr_shells)]
-        mpi.report("Mapping: " + format(shells_map))
-        mpi.report("Subtracting %f eV from the Fermi level." % self.fermi_energy)
-
         # build the k-point mesh, if its size was given on input (kmesh_mode >= 0),
         # otherwise it is built according to the data in the hr file (see
         # below)
@@ -227,6 +217,34 @@ class Wannier90Converter(ConverterTools):
             self.k_mesh = k_mesh
             # k_mesh soon to be removed
             self.kpts = kpts
+
+        if self.bloch_basis:
+            if os.path.isfile(self.w90_seed + '.nscf.out'):
+                fermi_weight_file = self.w90_seed + '.nscf.out'
+                print('Reading DFT band occupations from Quantum Espresso output {}'.format(fermi_weight_file))
+            elif os.path.isfile('OUTCAR'):
+                fermi_weight_file = 'OUTCAR'
+                print('Reading DFT band occupations from Vasp output {}'.format(fermi_weight_file))
+
+            f_weights, band_window, self.fermi_energy, _ = self.convert_misc_input(fermi_weight_file,
+                                                                                   self.w90_seed + '.nnkp', n_spin_blocs)
+            # Get density from k-point weighted average and sum over all spins and bands
+            # TODO: find out if that works or if we need to use the n_total_electrons from convert_misc_input
+            # How would that work with excluded bands though?
+            density_required = numpy.sum(f_weights.T * kpt_weights) * (2 - SP)
+            print('Overwriting required density with DFT result {:.5f}'.format(density_required))
+            print('and using the DFT Fermi energy {:.5f} eV\n'.format(self.fermi_energy))
+
+        # determine the number of inequivalent correlated shells and maps,
+        # needed for further processing
+        n_inequiv_shells, corr_to_inequiv, inequiv_to_corr = ConverterTools.det_shell_equivalence(
+            self, corr_shells)
+        mpi.report("Number of inequivalent shells: %d" % n_inequiv_shells)
+        mpi.report("Shell representatives: " + format(inequiv_to_corr))
+        shells_map = [inequiv_to_corr[corr_to_inequiv[ish]]
+                      for ish in range(n_corr_shells)]
+        mpi.report("Mapping: " + format(shells_map))
+        mpi.report("Subtracting {:.5f} eV from the Fermi level.".format(self.fermi_energy))
 
         # not used in this version: reset to dummy values?
         n_reps = [1 for i in range(n_inequiv_shells)]
@@ -394,7 +412,7 @@ class Wannier90Converter(ConverterTools):
                 # diagonal Kohn-Sham bands
                 hamk = [None] * self.n_k
                 for ik in range(self.n_k):
-                    hamk[ik] = numpy.diag(bandmat_full[isp][ik,:,2])
+                    hamk[ik] = numpy.diag(bandmat_full[isp][ik] - self.fermi_energy)
             # else for an isolated set of bands use fourier transform of H(R)
             else:
                 # make Fourier transform H(R) -> H(k) : it can be done one spin at a time
@@ -407,20 +425,6 @@ class Wannier90Converter(ConverterTools):
             # finally write hamk into hoppings
             for ik in range(self.n_k):
                 hopping[ik, isp] = hamk[ik] * energy_unit
-
-        if self.bloch_basis:
-            if os.path.isfile(self.w90_seed + '.nscf.out'):
-                fermi_weight_file = self.w90_seed + '.nscf.out'
-                print('Reading DFT band occupations from Quantum Espresso output {}'.format(fermi_weight_file))
-            elif os.path.isfile('OUTCAR'):
-                fermi_weight_file = 'OUTCAR'
-                print('Reading DFT band occupations from Vasp output {}'.format(fermi_weight_file))
-
-            f_weights, band_window = self.convert_misc_input(fermi_weight_file, self.w90_seed + '.nnkp',
-                                                             n_spin_blocs, n_orbitals)
-            # Get density from k-point weighted average and sum over all spins and bands
-            density_required = numpy.sum(f_weights.T * kpt_weights)
-            print('Overwriting required density with DFT result {:.5f}'.format(density_required))
 
         # Finally, save all required data into the HDF archive:
         # use_rotations is supposed to be an int = 0, 1, no bool
@@ -442,7 +446,7 @@ class Wannier90Converter(ConverterTools):
                 if not (self.misc_subgrp in ar):
                     ar.create_group(self.misc_subgrp)
                 ar[self.misc_subgrp]['dft_fermi_weights'] = f_weights
-                ar[self.misc_subgrp]['band_window'] = band_window
+                ar[self.misc_subgrp]['band_window'] = band_window+1 # Change to 1-based index
 
     def read_wannier90data(self, wannier_seed="wannier"):
         """
@@ -480,9 +484,8 @@ class Wannier90Converter(ConverterTools):
 
         hr_filename = wannier_seed + '_hr.dat'
         try:
-            with open(hr_filename, "r") as hr_filedesc:
+            with open(hr_filename, 'r') as hr_filedesc:
                 hr_data = hr_filedesc.readlines()
-                hr_filedesc.close()
         except IOError:
             mpi.report("The file %s could not be read!" % hr_filename)
 
@@ -501,19 +504,20 @@ class Wannier90Converter(ConverterTools):
             with open(u_filename,'r') as u_file:
                 u_data = u_file.readlines()
             # reads number of kpoints and number of wannier functions
-            nu_k, num_wf_u, _ = map(int, u_data[1].split())
-            if num_wf_u is not num_wf:
-                raise ValueError('#WFs must be identical for *_u.mat and *_hr.dat')
+            num_k_u, num_wf_u, _ = map(int, u_data[1].split())
+            assert num_k_u == self.n_k, '#k points must be identical for with *.inp and *_u.mat'
+            assert num_wf_u == num_wf, '#WFs must be identical for *_u.mat and *_hr.dat'
             mpi.report('reading {:20}...{}'.format(u_filename,u_data[0].strip('\n')))
-            del u_data[:2]
+            u_data = numpy.loadtxt(u_data, usecols=(0, 1), skiprows=2)
 
             mpi.report('Writing h5 archive in projector formalism: H(k) defined in KS Bloch basis')
 
             try:
                 # read 'seedname_u_dis.mat'
                 udis_filename = wannier_seed + '_u_dis.mat'
-                # if it exists the Kohn-Sham eigenvalues are needed
+                # if it exists the Kohn-Sham eigenvalues and the window are needed
                 band_filename = wannier_seed + '.eig'
+                wout_filename = wannier_seed + '.wout'
 
                 with open(udis_filename,'r') as udis_file:
                     udis_data = udis_file.readlines()
@@ -525,16 +529,28 @@ class Wannier90Converter(ConverterTools):
 
             if disentangle:
                 # reads number of kpoints, number of wannier functions and bands
-                nudis_k, num_wf_udis, num_bnd = map(int, udis_data[1].split())
-                if num_wf_udis is not num_wf_u:
-                    raise ValueError('#WFs must be identical for *_u.mat and *_u_dis.mat')
-                mpi.report('Found {:22}...{}'.format(udis_filename,udis_data[0].strip('\n')))
-                del udis_data[:2]
+                num_k_udis, num_wf_udis, num_ks_bands = map(int, udis_data[1].split())
+
+                assert num_k_udis == self.n_k, '#k points must be identical for *.inp and *_u_dis.mat'
+                assert num_wf_udis == num_wf, '#WFs must be identical for *_u.mat and *_hr.dat'
+
+                mpi.report('Found {:22}...{}, '.format(udis_filename,udis_data[0].strip('\n')))
+                udis_data = numpy.loadtxt(udis_data, usecols=(0, 1), skiprows=2)
 
                 # read Kohn-Sham eigenvalues from 'seedname.eig'
-                with open(band_filename,'r') as band_file:
-                    band_data = numpy.genfromtxt(band_file)
-                mpi.report('and {} (required for entangled bands).'.format(band_filename))
+                band_data = numpy.loadtxt(band_filename, usecols=2)
+                mpi.report('{} (required for entangled bands)'.format(band_filename))
+
+                # read disentanglement window from 'seedname.wout'
+                with open(wout_filename) as wout_file:
+                    for line in wout_file:
+                        if 'Outer:' in line:
+                            content = [x for x in line.split() if x]
+                            index = content.index('Outer:') + 1
+                            dis_window_min = float(content[index])
+                            dis_window_max = float(content[index+2])
+                            break
+                mpi.report('and {} for disentanglement energy window.'.format(wout_filename))
 
 
         # allocate arrays to save the R vector indexes and degeneracies and the
@@ -559,7 +575,7 @@ class Wannier90Converter(ConverterTools):
                     ir += 1
             # for each direct lattice vector R read the block of the
             # Hamiltonian H(R)
-            for ir, jj, ii in product(list(range(nrpt)), list(range(num_wf)), list(range(num_wf))):
+            for ir, jj, ii in product(range(nrpt), range(num_wf), range(num_wf)):
                 # advance one line, split the line into tokens
                 currpos += 1
                 cline = hr_data[currpos].split()
@@ -567,8 +583,7 @@ class Wannier90Converter(ConverterTools):
                 if int(cline[3]) != ii + 1 or int(cline[4]) != jj + 1:
                     mpi.report(
                         "Inconsistent indices at %s%s of R n. %s" % (ii, jj, ir))
-                rcurr = numpy.array(
-                    [int(cline[0]), int(cline[1]), int(cline[2])])
+                rcurr = numpy.array([int(cline[0]), int(cline[1]), int(cline[2])])
                 if ii == 0 and jj == 0:
                     rvec_idx[ir] = rcurr
                     rprec = rcurr
@@ -589,42 +604,44 @@ class Wannier90Converter(ConverterTools):
 
         # first, get the input for u_mat
         if self.bloch_basis:
-            # initiate U matrices and fill from file "seedname_u.mat"
-            u_mat = numpy.zeros([nu_k, num_wf, num_wf], dtype=complex)
-            for ik in range(nu_k):
-                k_block = [line.split() for line in u_data[ik*(num_wf*num_wf+2)+1:(num_wf*num_wf+2)*(ik+1)]]
-                # skip first line (k-point)
-                vals = numpy.array(k_block[1:],dtype=float)
-                u_of_k = vals[:, 0] + 1j * vals[:, 1]
-                u_mat[ik,:,:] = u_of_k.reshape(num_wf,num_wf,order='F')
-
+            u_data = u_data[:, 0] + 1j * u_data[:, 1]
+            u_data = u_data.reshape((self.n_k, num_wf*num_wf+1))[:, 1:]
+            u_mat = u_data.reshape((self.n_k, num_wf, num_wf)).transpose((0, 2, 1))
         else:
             # Wannier basis; fill u_mat with identity
             u_mat = numpy.zeros([self.n_k, num_wf, num_wf], dtype=complex)
             for ik in range(self.n_k):
                 u_mat[ik,:,:] = numpy.identity(num_wf,dtype=complex)
 
-        # now, check what is needed in the case of disentanglement
+        # now, check what is needed in the case of disentanglement:
+        # The file seedname_u_dis.mat contains only the bands inside the window
+        # and then fills the rest up with zeros. Therefore, we need to put the
+        # entries from udis_data in the correct position in udis_mat, i.e.
+        # shifting by the number of bands below dis_window_min
         if self.bloch_basis and disentangle:
-            #initiate U disentanglement matrices and fill from file "seedname_u_dis.mat"
-            udis_mat = numpy.zeros([nudis_k, num_bnd, num_wf], dtype=complex)
-            for ik in range(nudis_k):
-                k_block = [line.split() for line in udis_data[ik*(num_wf*num_bnd+2)+1:(num_wf*num_bnd+2)*(ik+1)]]
-                # skip first line (k-point)
-                vals = numpy.array(k_block[1:],dtype=float)
-                udis_of_k = vals[:, 0] + 1j * vals[:, 1]
-                udis_mat[ik,:,:] = udis_of_k.reshape(num_bnd,num_wf,order='F')
-
             # reshape band_data
-            band_mat = band_data.reshape(nudis_k,num_bnd,3)
+            band_mat = band_data.reshape(self.n_k, num_ks_bands)
+            # and determine which bands are inside the band window
+            inside_window = numpy.logical_and(band_mat >= dis_window_min,
+                                              band_mat <= dis_window_max)
+            n_inside_per_k = numpy.sum(inside_window, axis=1)
 
+            # Reformats udis_data as complex, without header
+            udis_data = udis_data[:, 0] + 1j * udis_data[:, 1]
+            udis_data = udis_data.reshape((self.n_k, num_wf*num_ks_bands+1))[:, 1:]
+            udis_data = udis_data.reshape((self.n_k, num_wf, num_ks_bands))
+
+            #initiate U disentanglement matrices and fill from file "seedname_u_dis.mat"
+            udis_mat = numpy.zeros([self.n_k, num_ks_bands, num_wf], dtype=complex)
+            for ik in range(self.n_k):
+                udis_mat[ik, inside_window[ik]] = udis_data[ik, :, :n_inside_per_k[ik]].T
+                assert numpy.allclose(udis_data[ik, :, n_inside_per_k[ik]:], 0)
         else:
             # no disentanglement; fill udis_mat with identity
             udis_mat = numpy.array([numpy.identity(num_wf,dtype=complex)] * self.n_k)
 
             # create dummy entries for band_mat to multiply with Wannier Hamiltonian energies
-            band_mat = numpy.zeros([self.n_k, num_wf,3])
-            band_mat[:,:,2] = 1
+            band_mat = numpy.ones([self.n_k, num_wf])
 
         # return the data into variables
         return nrpt, rvec_idx, rvec_deg, num_wf, h_of_r, u_mat, udis_mat, band_mat
@@ -819,7 +836,7 @@ class Wannier90Converter(ConverterTools):
 
         return h_of_k
 
-    def convert_misc_input(self, out_filename, nnkp_filename, n_spin_blocs, n_orbitals):
+    def convert_misc_input(self, out_filename, nnkp_filename, n_spin_blocs):
         """
         Reads input from DFT code calculations to get occupations
 
@@ -831,8 +848,6 @@ class Wannier90Converter(ConverterTools):
             filename of Wannier postproc_setup run
         n_spin_blocs : int
             SP + 1 - SO
-        n_orbitals : numpy.array[self.n_k, n_spin_blocs]
-            number of orbitals in window used in projector formalism
 
         Returns
         -------
@@ -840,7 +855,10 @@ class Wannier90Converter(ConverterTools):
             occupations from DFT calculation
         band_window : numpy.array[self.n_k, n_spin_blocs ,n_orbitals]
             band indices of correlated subspace
-
+        fermi_energy : float
+            the DFT Kohn-Sham Fermi energy
+        n_total_electrons : float
+            the total number of electrons, usually integer value
         """
 
         # Read only from the master node
@@ -854,14 +872,26 @@ class Wannier90Converter(ConverterTools):
         if 'nscf.out' in out_filename:
             occupations = []
             with open(out_filename,'r') as out_file:
+                # TODO: read in fermi energy and total number of electrons from nscf.out
+                # (search for "number of electrons" and "the Fermi energy is")
+                fermi_energy = 0
+
                 out_data = out_file.readlines()
-                for ct, line in enumerate(out_data):
-                    # read number of KS states
-                    if 'number of Kohn-Sham states=' in line:
-                        n_ks = int(line.split()[-1])
-                    # get occupations
-                    elif line.strip() == 'End of band structure calculation':
-                        break
+            # Reads number of Kohn-Sham states and total number of electrons
+            for line in out_data:
+                if 'number of electrons' in line:
+                    n_total_electrons = float(line.split()[-1])
+
+                if 'number of Kohn-Sham states' in line:
+                    n_ks = int(line.split()[-1])
+
+                if 'Fermi energy' in line:
+                    fermi_energy = float(line.split()[-2])
+
+                # get occupations
+            for ct, line in enumerate(out_data):
+                if line.strip() == 'End of band structure calculation':
+                    break
 
             assert 'k = ' in out_data[ct + 2], 'Cannot read occupations. Set verbosity = "high" in {}'.format(out_filename)
             out_data = out_data[ct+2:]
@@ -893,8 +923,15 @@ class Wannier90Converter(ConverterTools):
                     break
             outcar_data = outcar_data[-i:]
 
+            # Reads fractional occupations, fermi energy and total # electrons
             start_read = False
             for line in outcar_data:
+                if 'BZINTS' in line:
+                    line_content = [x for x in line.split() if x]
+                    fermi_energy = float(line_content[3].replace(';', ''))
+                    n_total_electrons = float(line_content[4])
+                    continue
+
                 if 'k-point' in line:
                     start_read = True
                     k_index = int(line[line.find('k-point')+7:line.find(':')])
@@ -914,11 +951,12 @@ class Wannier90Converter(ConverterTools):
                 line_content = [x for x in line.split() if x]
                 band_index = int(line_content[0])
                 assert band_index == len(occupations[-1])+1
-                occupations[-1].append(float(line_content[2]))
+                # TODO: is this divide by 2 necessary when doing SP/SO calculations?
+                occupations[-1].append(float(line_content[2]) / 2)
 
         # assume that all bands contribute, then remove from exclude_bands; python indexing
         corr_bands = list(range(n_ks))
-        # read exlcude_bands from "seedname.nnkp" file
+        # read exclude_bands from "seedname.nnkp" file
         with open(nnkp_filename, 'r') as nnkp_file:
             read = False
             skip = False
@@ -950,4 +988,4 @@ class Wannier90Converter(ConverterTools):
         f_weights = included_occupations.reshape(included_occupations.shape[0], 1,
                                                  included_occupations.shape[1])
 
-        return f_weights, band_window
+        return f_weights, band_window, fermi_energy, n_total_electrons
