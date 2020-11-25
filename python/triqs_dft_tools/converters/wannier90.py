@@ -875,16 +875,23 @@ class Wannier90Converter(ConverterTools):
                 # TODO: read in fermi energy and total number of electrons from nscf.out
                 # (search for "number of electrons" and "the Fermi energy is")
                 fermi_energy = 0
-                n_total_electrons = None
 
                 out_data = out_file.readlines()
-                for ct, line in enumerate(out_data):
-                    # read number of KS states
-                    if 'number of Kohn-Sham states=' in line:
-                        n_ks = int(line.split()[-1])
-                    # get occupations
-                    elif line.strip() == 'End of band structure calculation':
-                        break
+            # Reads number of Kohn-Sham states and total number of electrons
+            for line in out_data:
+                if 'number of electrons' in line:
+                    n_total_electrons = float(line.split()[-1])
+
+                if 'number of Kohn-Sham states' in line:
+                    n_ks = int(line.split()[-1])
+
+                if 'Fermi energy' in line:
+                    fermi_energy = float(line.split()[-2])
+
+                # get occupations
+            for ct, line in enumerate(out_data):
+                if line.strip() == 'End of band structure calculation':
+                    break
 
             assert 'k = ' in out_data[ct + 2], 'Cannot read occupations. Set verbosity = "high" in {}'.format(out_filename)
             out_data = out_data[ct+2:]
