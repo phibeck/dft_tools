@@ -379,7 +379,7 @@ class Wannier90Converter(ConverterTools):
 
         mpi.report("The k-point grid has dimensions: %d, %d, %d" % tuple(nki))
         # if calculations are spin-polarized, then renormalize k-point weights
-        if SP == 1:
+        if SP == 1 and SO == 0:
             bz_weights *= 0.5
             kpt_weights *= 0.5
 
