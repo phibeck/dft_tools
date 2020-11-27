@@ -147,8 +147,10 @@ class Wannier90Converter(ConverterTools):
             else:
                 # some default grid, if everything else fails...
                 nki = [8, 8, 8]
-            # read the total number of electrons per cell
+            # read the total number of electrons per cell if not in bloch basis
+            # in bloch basis, this is later calculated from the partial occupations
             density_required = float(next(R))
+
             # we do not read shells, because we have no additional shells beyond correlated ones,
             # and the data will be copied from corr_shells into shells (see below)
             # number of corr. shells (e.g. Fe d, Ce f) in the unit cell,
@@ -222,15 +224,15 @@ class Wannier90Converter(ConverterTools):
             if os.path.isfile(self.w90_seed + '.nscf.out'):
                 fermi_weight_file = self.w90_seed + '.nscf.out'
                 print('Reading DFT band occupations from Quantum Espresso output {}'.format(fermi_weight_file))
-            elif os.path.isfile('OUTCAR'):
-                fermi_weight_file = 'OUTCAR'
+            elif os.path.isfile('LOCPROJ'):
+                fermi_weight_file = 'LOCPROJ'
                 print('Reading DFT band occupations from Vasp output {}'.format(fermi_weight_file))
+            else:
+                raise IOError('seedname.nscf.out or LOCPROJ required in bloch_basis mode')
 
-            f_weights, band_window, self.fermi_energy, _ = self.convert_misc_input(fermi_weight_file,
-                                                                                   self.w90_seed + '.nnkp', n_spin_blocs)
+            f_weights, band_window, self.fermi_energy = self.convert_misc_input(fermi_weight_file,
+                                                                                self.w90_seed + '.nnkp', n_spin_blocs)
             # Get density from k-point weighted average and sum over all spins and bands
-            # TODO: find out if that works or if we need to use the n_total_electrons from convert_misc_input
-            # How would that work with excluded bands though?
             density_required = numpy.sum(f_weights.T * kpt_weights) * (2 - SP)
             print('Overwriting required density with DFT result {:.5f}'.format(density_required))
             print('and using the DFT Fermi energy {:.5f} eV\n'.format(self.fermi_energy))
@@ -545,7 +547,7 @@ class Wannier90Converter(ConverterTools):
                 with open(wout_filename) as wout_file:
                     for line in wout_file:
                         if 'Outer:' in line:
-                            content = [x for x in line.split() if x]
+                            content = line.split()
                             index = content.index('Outer:') + 1
                             dis_window_min = float(content[index])
                             dis_window_max = float(content[index+2])
@@ -857,8 +859,6 @@ class Wannier90Converter(ConverterTools):
             band indices of correlated subspace
         fermi_energy : float
             the DFT Kohn-Sham Fermi energy
-        n_total_electrons : float
-            the total number of electrons, usually integer value
         """
 
         # Read only from the master node
@@ -866,16 +866,14 @@ class Wannier90Converter(ConverterTools):
             return
 
         assert n_spin_blocs == 1, 'spin-polarized not implemented'
-        assert 'nscf.out' in out_filename or out_filename == 'OUTCAR'
+        assert 'nscf.out' in out_filename or out_filename == 'LOCPROJ'
 
         occupations = []
         if 'nscf.out' in out_filename:
             occupations = []
             with open(out_filename,'r') as out_file:
-                # TODO: read in fermi energy and total number of electrons from nscf.out
-                # (search for "number of electrons" and "the Fermi energy is")
+                # TODO: read in fermi energy from nscf.out (search for the Fermi energy is")
                 fermi_energy = 0
-                n_total_electrons = None
 
                 out_data = out_file.readlines()
                 for ct, line in enumerate(out_data):
@@ -900,52 +898,14 @@ class Wannier90Converter(ConverterTools):
                 flattened_occs = [float(item) for sublist in occs for item in sublist]
                 occupations.append(flattened_occs)
         else:
-            # Reads OUTCAR
-            # TODO: test when NWRITE < 2, where should I print a warning?
+            # Reads LOCPROJ
             with open(out_filename, 'r') as file:
-                outcar_data = file.readlines()
-            # Reads number of Kohn-Sham bands from OUTCAR
-            for line in outcar_data:
-                if 'NBANDS' in line:
-                    n_ks = int(line[line.rfind('=')+1:])
-                    break
+                header = file.readline()
+                n_ks = int(header.split()[2])
+                fermi_energy = float(header.split()[4])
 
-            # Finds beginning of last iteration and deletes data before
-            for i, line in enumerate(reversed(outcar_data)):
-                if 'Iteration' in line:
-                    break
-            outcar_data = outcar_data[-i:]
-
-            # Reads fractional occupations, fermi energy and total # electrons
-            start_read = False
-            for line in outcar_data:
-                if 'BZINTS' in line:
-                    line_content = [x for x in line.split() if x]
-                    fermi_energy = float(line_content[3].replace(';', ''))
-                    n_total_electrons = float(line_content[4])
-                    continue
-
-                if 'k-point' in line:
-                    start_read = True
-                    k_index = int(line[line.find('k-point')+7:line.find(':')])
-                    assert k_index == len(occupations)+1
-                    occupations.append([])
-                    continue
-
-                if not start_read:
-                    continue
-
-                if 'occupation' in line or line.strip() == '':
-                    continue
-
-                if '-------------------' in line:
-                    break
-
-                line_content = [x for x in line.split() if x]
-                band_index = int(line_content[0])
-                assert band_index == len(occupations[-1])+1
-                # TODO: is this divide by 2 necessary when doing SP/SO calculations?
-                occupations[-1].append(float(line_content[2]) / 2)
+                occupations = numpy.loadtxt((line for line in file if 'orbital' in line), usecols=5)
+            occupations = occupations.reshape((self.n_k, n_ks))
 
         # assume that all bands contribute, then remove from exclude_bands; python indexing
         corr_bands = list(range(n_ks))
@@ -981,4 +941,4 @@ class Wannier90Converter(ConverterTools):
         f_weights = included_occupations.reshape(included_occupations.shape[0], 1,
                                                  included_occupations.shape[1])
 
-        return f_weights, band_window, fermi_energy, n_total_electrons
+        return f_weights, band_window, fermi_energy
