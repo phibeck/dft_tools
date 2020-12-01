@@ -381,7 +381,7 @@ class Wannier90Converter(ConverterTools):
 
         mpi.report("The k-point grid has dimensions: %d, %d, %d" % tuple(nki))
         # if calculations are spin-polarized, then renormalize k-point weights
-        if SP == 1:
+        if SP == 1 and SO == 0:
             bz_weights *= 0.5
             kpt_weights *= 0.5
 
@@ -872,17 +872,18 @@ class Wannier90Converter(ConverterTools):
         if 'nscf.out' in out_filename:
             occupations = []
             with open(out_filename,'r') as out_file:
-                # TODO: read in fermi energy from nscf.out (search for the Fermi energy is")
-                fermi_energy = 0
-
                 out_data = out_file.readlines()
-                for ct, line in enumerate(out_data):
-                    # read number of KS states
-                    if 'number of Kohn-Sham states=' in line:
-                        n_ks = int(line.split()[-1])
-                    # get occupations
-                    elif line.strip() == 'End of band structure calculation':
-                        break
+            # Reads number of Kohn-Sham states and Fermi energy
+            for line in out_data:
+                if 'number of Kohn-Sham states' in line:
+                    n_ks = int(line.split()[-1])
+                elif 'Fermi energy' in line:
+                    fermi_energy = float(line.split()[-2])
+
+                # get occupations
+            for ct, line in enumerate(out_data):
+                if line.strip() == 'End of band structure calculation':
+                    break
 
             assert 'k = ' in out_data[ct + 2], 'Cannot read occupations. Set verbosity = "high" in {}'.format(out_filename)
             out_data = out_data[ct+2:]
