@@ -409,21 +409,17 @@ class Wannier90Converter(ConverterTools):
         # Then, compute the hoppings in reciprocal space
         hopping = numpy.zeros([self.n_k, n_spin_blocs, numpy.max(n_orbitals), numpy.max(n_orbitals)], dtype=complex)
         for isp in range(n_spin_blocs):
-            # if disentanglement is True, use Kohn-Sham eigenvalues as hamk
-            if n_bands_max > self.nwfs:
+            # if bloch_basis is True, use Kohn-Sham eigenvalues as hamk
+            # this ensures that the calculation of the band-correlation energy
+            # is consistent with SumkDFT's calc_density_correction
+            if self.bloch_basis:
                 # diagonal Kohn-Sham bands
-                hamk = [None] * self.n_k
-                for ik in range(self.n_k):
-                    hamk[ik] = numpy.diag(bandmat_full[isp][ik] - self.fermi_energy)
+                hamk = [numpy.diag(bandmat_full[isp][ik] - self.fermi_energy)
+                        for ik in range(self.n_k)]
             # else for an isolated set of bands use fourier transform of H(R)
             else:
                 # make Fourier transform H(R) -> H(k) : it can be done one spin at a time
                 hamk = self.fourier_ham(hamr_full[isp])
-                # get upfolded hamk for usage with projectors
-                if self.bloch_basis:
-                    for ik in range(self.n_k):
-                        projmat = proj_mat[ik,isp,:,:,:].reshape(self.nwfs,numpy.max(n_orbitals))
-                        hamk[ik] = numpy.dot(projmat.T.conj(),numpy.dot(hamk[ik],projmat))
             # finally write hamk into hoppings
             for ik in range(self.n_k):
                 hopping[ik, isp] = hamk[ik] * energy_unit
