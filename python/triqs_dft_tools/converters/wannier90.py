@@ -620,6 +620,9 @@ class Wannier90Converter(ConverterTools):
         if self.bloch_basis:
             # reshape band_data
             band_mat = band_data.reshape(self.n_k, num_ks_bands)
+        else:
+            # Not used in wannier basis
+            band_mat = None
 
         if self.bloch_basis and disentangle:
             # Determine which bands are inside the band window
