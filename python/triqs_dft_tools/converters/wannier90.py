@@ -525,6 +525,10 @@ class Wannier90Converter(ConverterTools):
                 mpi.report('WARNING: File {} missing.'.format(udis_filename))
                 mpi.report('Assuming an isolated set of bands. Check if this is what you want!')
 
+            # read Kohn-Sham eigenvalues from 'seedname.eig'
+            mpi.report('Reading {}'.format(band_filename))
+            band_data = numpy.loadtxt(band_filename, usecols=2)
+
             if disentangle:
                 # reads number of kpoints, number of wannier functions and bands
                 num_k_udis, num_wf_udis, num_ks_bands = map(int, udis_data[1].split())
@@ -534,10 +538,6 @@ class Wannier90Converter(ConverterTools):
 
                 mpi.report('Found {:22}...{}, '.format(udis_filename,udis_data[0].strip('\n')))
                 udis_data = numpy.loadtxt(udis_data, usecols=(0, 1), skiprows=2)
-
-                # read Kohn-Sham eigenvalues from 'seedname.eig'
-                band_data = numpy.loadtxt(band_filename, usecols=2)
-                mpi.report('{} (required for entangled bands)'.format(band_filename))
 
                 # read disentanglement window from 'seedname.wout'
                 with open(wout_filename) as wout_file:
@@ -549,7 +549,8 @@ class Wannier90Converter(ConverterTools):
                             dis_window_max = float(content[index+2])
                             break
                 mpi.report('and {} for disentanglement energy window.'.format(wout_filename))
-
+            else:
+                num_ks_bands = num_wf
 
         # allocate arrays to save the R vector indexes and degeneracies and the
         # Hamiltonian
@@ -616,10 +617,12 @@ class Wannier90Converter(ConverterTools):
         # and then fills the rest up with zeros. Therefore, we need to put the
         # entries from udis_data in the correct position in udis_mat, i.e.
         # shifting by the number of bands below dis_window_min
-        if self.bloch_basis and disentangle:
+        if self.bloch_basis:
             # reshape band_data
             band_mat = band_data.reshape(self.n_k, num_ks_bands)
-            # and determine which bands are inside the band window
+
+        if self.bloch_basis and disentangle:
+            # Determine which bands are inside the band window
             inside_window = numpy.logical_and(band_mat >= dis_window_min,
                                               band_mat <= dis_window_max)
             n_inside_per_k = numpy.sum(inside_window, axis=1)
@@ -637,9 +640,6 @@ class Wannier90Converter(ConverterTools):
         else:
             # no disentanglement; fill udis_mat with identity
             udis_mat = numpy.array([numpy.identity(num_wf,dtype=complex)] * self.n_k)
-
-            # create dummy entries for band_mat to multiply with Wannier Hamiltonian energies
-            band_mat = numpy.ones([self.n_k, num_wf])
 
         # return the data into variables
         return nrpt, rvec_idx, rvec_deg, num_wf, h_of_r, u_mat, udis_mat, band_mat
