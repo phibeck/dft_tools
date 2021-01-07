@@ -638,8 +638,8 @@ class Wannier90Converter(ConverterTools):
             u_mat = u_mat.reshape((n_k, num_wf, num_wf)).transpose((0, 2, 1))
         else:
             # Wannier basis; fill u_mat with identity
-            u_mat = numpy.zeros([n_k, num_wf, num_wf], dtype=complex)
-            for ik in range(n_k):
+            u_mat = numpy.zeros([self.n_k, num_wf, num_wf], dtype=complex)
+            for ik in range(self.n_k):
                 u_mat[ik,:,:] = numpy.identity(num_wf,dtype=complex)
 
         # now, check what is needed in the case of disentanglement:
@@ -672,7 +672,7 @@ class Wannier90Converter(ConverterTools):
                 assert numpy.allclose(udis_data[ik, :, n_inside_per_k[ik]:], 0)
         else:
             # no disentanglement; fill udis_mat with identity
-            udis_mat = numpy.array([numpy.identity(num_wf,dtype=complex)] * n_k)
+            udis_mat = numpy.array([numpy.identity(num_wf,dtype=complex)] * self.n_k)
 
         # return the data into variables
         return nrpt, rvec_idx, rvec_deg, num_wf, h_of_r, u_mat, udis_mat, band_mat, k_mesh
