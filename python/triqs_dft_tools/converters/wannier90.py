@@ -47,7 +47,6 @@
 
 
 import numpy
-import math
 import os.path
 from itertools import product
 
@@ -209,33 +208,12 @@ class Wannier90Converter(ConverterTools):
         mpi.report('Total number of WFs expected in the correlated shells: {0:d}'.format(dim_corr_shells))
 
         # build the k-point mesh, if its size was given on input (kmesh_mode >= 0),
-        # otherwise it is built according to the data in the hr file (see
-        # below)
-        if kmesh_mode >= 0:
-            n_k, k_mesh, bz_weights = self.kmesh_build(nki, kmesh_mode)
-            # k_mesh and bz_weights soon to be removed, replaced by kpts and kpt_weights
+        # otherwise it is built according to the data in the hr file (see below)
+        # If output is in bloch_basis, we use k mesh from seedname_u.mat for consistency
+        if kmesh_mode >= 0 and not self.bloch_basis:
             n_k, kpts, kpt_weights = self.kmesh_build(nki, kmesh_mode)
             self.n_k = n_k
-            self.k_mesh = k_mesh
-            # k_mesh soon to be removed
             self.kpts = kpts
-
-        if self.bloch_basis:
-            if os.path.isfile(self.w90_seed + '.nscf.out'):
-                fermi_weight_file = self.w90_seed + '.nscf.out'
-                print('Reading DFT band occupations from Quantum Espresso output {}'.format(fermi_weight_file))
-            elif os.path.isfile('LOCPROJ'):
-                fermi_weight_file = 'LOCPROJ'
-                print('Reading DFT band occupations from Vasp output {}'.format(fermi_weight_file))
-            else:
-                raise IOError('seedname.nscf.out or LOCPROJ required in bloch_basis mode')
-
-            f_weights, band_window, self.fermi_energy = self.convert_misc_input(fermi_weight_file,
-                                                                                self.w90_seed + '.nnkp', n_spin_blocs)
-            # Get density from k-point weighted average and sum over all spins and bands
-            density_required = numpy.sum(f_weights.T * kpt_weights) * (2 - SP)
-            print('Overwriting required density with DFT result {:.5f}'.format(density_required))
-            print('and using the DFT Fermi energy {:.5f} eV\n'.format(self.fermi_energy))
 
         # determine the number of inequivalent correlated shells and maps,
         # needed for further processing
@@ -246,7 +224,6 @@ class Wannier90Converter(ConverterTools):
         shells_map = [inequiv_to_corr[corr_to_inequiv[ish]]
                       for ish in range(n_corr_shells)]
         mpi.report("Mapping: " + format(shells_map))
-        mpi.report("Subtracting {:.5f} eV from the Fermi level.".format(self.fermi_energy))
 
         # not used in this version: reset to dummy values?
         n_reps = [1 for i in range(n_inequiv_shells)]
@@ -281,7 +258,8 @@ class Wannier90Converter(ConverterTools):
             # now grab the data from the H(R) file
             mpi.report(
                 "\nThe Hamiltonian in MLWF basis is extracted from %s files..." % file_seed)
-            nr, rvec, rdeg, nw, hamr, u_mat, udis_mat, band_mat = self.read_wannier90data(file_seed)
+            (nr, rvec, rdeg, nw, hamr, u_mat, udis_mat,
+             band_mat, k_mesh_from_umat) = self.read_wannier90data(file_seed)
             # number of R vectors, their indices, their degeneracy, number of
             # WFs, H(R)
             mpi.report("\n... done: %d R vectors, %d WFs found" % (nr, nw))
@@ -292,7 +270,14 @@ class Wannier90Converter(ConverterTools):
                 self.nrpt = nr
 
                 # k-point grid: (if not defined before)
-                if kmesh_mode == -1:
+                if self.bloch_basis:
+                    mpi.report('Reading k mesh from seedname_u.mat file')
+                    kpts = k_mesh_from_umat
+                    n_k = len(kpts)
+                    kpt_weights = numpy.full(n_k, 1/n_k)
+                    self.n_k = n_k
+                    self.kpts = kpts
+                elif kmesh_mode == -1:
                     # the size of the k-point mesh is determined from the
                     # largest R vector
                     nki = [2 * rvec[:, idir].max() + 1 for idir in range(3)]
@@ -300,13 +285,10 @@ class Wannier90Converter(ConverterTools):
                     # wannier90 convention: if we have nki k-points along the i-th direction,
                     # then we should get 2*(nki/2)+nki%2 R points along that
                     # direction
-                    n_k, k_mesh, bz_weights = self.kmesh_build(nki)
-                    # k_mesh and bz_weights soon to be removed, replaced by kpts and kpt_weights
                     n_k, kpts, kpt_weights = self.kmesh_build(nki)
-                self.n_k = n_k
-                self.k_mesh = k_mesh
-                # k_mesh soon to be removed
-                self.kpts = kpts
+                    self.n_k = n_k
+                    self.kpts = kpts
+
 
                 # set the R vectors and their degeneracy
                 self.rvec = rvec
@@ -379,10 +361,28 @@ class Wannier90Converter(ConverterTools):
                             "Rotations for spin component n. %d do not match!" % isp)
         # end loop on isp
 
+        # Reads misc input needed for CSC calculations
+        if self.bloch_basis:
+            if os.path.isfile(self.w90_seed + '.nscf.out'):
+                fermi_weight_file = self.w90_seed + '.nscf.out'
+                print('Reading DFT band occupations from Quantum Espresso output {}'.format(fermi_weight_file))
+            # TODO: replace LOCPROJ by EIGENVAL
+            elif os.path.isfile('LOCPROJ'):
+                fermi_weight_file = 'LOCPROJ'
+                print('Reading DFT band occupations from Vasp output {}'.format(fermi_weight_file))
+            else:
+                raise IOError('seedname.nscf.out or LOCPROJ required in bloch_basis mode')
+
+            f_weights, band_window, self.fermi_energy = self.convert_misc_input(fermi_weight_file,
+                                                                                self.w90_seed + '.nnkp', n_spin_blocs)
+            # Get density from k-point weighted average and sum over all spins and bands
+            density_required = numpy.sum(f_weights.T * kpt_weights) * (2 - SP)
+            print('Overwriting required density with DFT result {:.5f}'.format(density_required))
+            print('and using the DFT Fermi energy {:.5f} eV\n'.format(self.fermi_energy))
+
         mpi.report("The k-point grid has dimensions: %d, %d, %d" % tuple(nki))
         # if calculations are spin-polarized, then renormalize k-point weights
         if SP == 1 and SO == 0:
-            bz_weights *= 0.5
             kpt_weights *= 0.5
 
         # Third, initialise the projectors
@@ -414,15 +414,38 @@ class Wannier90Converter(ConverterTools):
             # is consistent with SumkDFT's calc_density_correction
             if self.bloch_basis:
                 # diagonal Kohn-Sham bands
-                hamk = [numpy.diag(bandmat_full[isp][ik] - self.fermi_energy)
-                        for ik in range(self.n_k)]
+                # TODO: test for system with self.nwfs > dim_corr_shells
+                hamk = [numpy.diag(bandmat_full[isp][ik]) for ik in range(self.n_k)]
+
+                # Sanity check if the local Hamiltonian with the projector method
+                # corresponds to W90 result
+                wannier_ham = self.fourier_ham(hamr_full[isp])
+                for ik in range(self.n_k):
+                    proj_mat_flattened = proj_mat[ik, isp].reshape(self.nwfs, numpy.max(n_orbitals))
+                    downfolded_ham = proj_mat_flattened.dot(hamk[ik].dot(proj_mat_flattened.conj().T))
+
+                    if not numpy.allclose(downfolded_ham, wannier_ham[ik], atol=self._w90zero, rtol=0):
+                        mpi.report('WARNING: mismatch between downfolded Hamiltonian and '
+                                   + f'Fourier transformed H(R). First occurred at kpt {ik}:')
+
+                        with numpy.printoptions(formatter={'complexfloat': '{:+.3f}'.format}):
+                            mpi.report('Downfolded Hamiltonian, P H_eig P')
+                            mpi.report(downfolded_ham)
+                            mpi.report('\nWannier Hamiltonian, Fourier(H(r))')
+                            mpi.report(wannier_ham[ik])
+                        break
             # else for an isolated set of bands use fourier transform of H(R)
             else:
                 # make Fourier transform H(R) -> H(k) : it can be done one spin at a time
                 hamk = self.fourier_ham(hamr_full[isp])
             # finally write hamk into hoppings
             for ik in range(self.n_k):
-                hopping[ik, isp] = hamk[ik] * energy_unit
+                hopping[ik, isp] = hamk[ik] - numpy.identity(numpy.max(n_orbitals)) * self.fermi_energy
+            hopping *= energy_unit
+        mpi.report("Subtracting {:.5f} eV from the Fermi level.".format(self.fermi_energy))
+
+        # bz_weights required by triqs h5 standard but soon to be replaced by kpt_weights
+        bz_weights = kpt_weights
 
         # Finally, save all required data into the HDF archive:
         # use_rotations is supposed to be an int = 0, 1, no bool
@@ -473,7 +496,10 @@ class Wannier90Converter(ConverterTools):
             U^dis(k) = rectangular matrix for entangled bands
         band_mat : numpy.array
             \epsilon_nk = Kohn-Sham eigenvalues (in eV) needed for entangled bands
-
+            If not self.bloch_basis unused and therefore None
+        k_mesh : numpy.array
+            The k mesh read from the seedname_u.mat file to ensure consistency
+            If not self.bloch_basis unused and therefore None
         """
 
         # Read only from the master node
@@ -496,17 +522,25 @@ class Wannier90Converter(ConverterTools):
         except ValueError:
             mpi.report("Could not read number of WFs or R vectors")
 
+        k_mesh = None
+
         if self.bloch_basis:
             # first, read u matrices from 'seedname_u.mat'
             u_filename = wannier_seed + '_u.mat'
             with open(u_filename,'r') as u_file:
                 u_data = u_file.readlines()
             # reads number of kpoints and number of wannier functions
-            num_k_u, num_wf_u, _ = map(int, u_data[1].split())
-            assert num_k_u == self.n_k, '#k points must be identical for with *.inp and *_u.mat'
+            n_k, num_wf_u, _ = map(int, u_data[1].split())
+            assert n_k == nrpt, 'Number of k and r points has to be identical'
             assert num_wf_u == num_wf, '#WFs must be identical for *_u.mat and *_hr.dat'
             mpi.report('reading {:20}...{}'.format(u_filename,u_data[0].strip('\n')))
-            u_data = numpy.loadtxt(u_data, usecols=(0, 1), skiprows=2)
+
+            # Reads k mesh from all lines with 3 floats
+            k_mesh = numpy.loadtxt((line for line in u_data if line.count('.') == 3))
+            assert k_mesh.shape == (n_k, 3)
+            # Reads u matrices from all lines with 2 floats
+            u_mat = numpy.loadtxt((line for line in u_data if line.count('.') == 2))
+            assert u_mat.shape == (n_k*num_wf*num_wf, 2)
 
             mpi.report('Writing h5 archive in projector formalism: H(k) defined in KS Bloch basis')
 
@@ -533,7 +567,7 @@ class Wannier90Converter(ConverterTools):
                 # reads number of kpoints, number of wannier functions and bands
                 num_k_udis, num_wf_udis, num_ks_bands = map(int, udis_data[1].split())
 
-                assert num_k_udis == self.n_k, '#k points must be identical for *.inp and *_u_dis.mat'
+                assert num_k_udis == n_k, '#k points must be identical for *.inp and *_u_dis.mat'
                 assert num_wf_udis == num_wf, '#WFs must be identical for *_u.mat and *_hr.dat'
 
                 mpi.report('Found {:22}...{}, '.format(udis_filename,udis_data[0].strip('\n')))
@@ -593,23 +627,19 @@ class Wannier90Converter(ConverterTools):
                             "Inconsistent indices for R vector n. %s" % ir)
 
                 # fill h_of_r with the matrix elements of the Hamiltonian
-                if not numpy.any(rcurr) and ii == jj:
-                    h_of_r[ir][ii, jj] = complex(float(cline[5]) - self.fermi_energy, float(cline[6]))
-                else:
-                    h_of_r[ir][ii, jj] = complex(float(cline[5]), float(cline[6]))
+                h_of_r[ir][ii, jj] = complex(float(cline[5]), float(cline[6]))
 
         except ValueError:
             mpi.report("Wrong data or structure in file %s" % hr_filename)
 
         # first, get the input for u_mat
         if self.bloch_basis:
-            u_data = u_data[:, 0] + 1j * u_data[:, 1]
-            u_data = u_data.reshape((self.n_k, num_wf*num_wf+1))[:, 1:]
-            u_mat = u_data.reshape((self.n_k, num_wf, num_wf)).transpose((0, 2, 1))
+            u_mat = u_mat[:, 0] + 1j * u_mat[:, 1]
+            u_mat = u_mat.reshape((n_k, num_wf, num_wf)).transpose((0, 2, 1))
         else:
             # Wannier basis; fill u_mat with identity
-            u_mat = numpy.zeros([self.n_k, num_wf, num_wf], dtype=complex)
-            for ik in range(self.n_k):
+            u_mat = numpy.zeros([n_k, num_wf, num_wf], dtype=complex)
+            for ik in range(n_k):
                 u_mat[ik,:,:] = numpy.identity(num_wf,dtype=complex)
 
         # now, check what is needed in the case of disentanglement:
@@ -619,7 +649,7 @@ class Wannier90Converter(ConverterTools):
         # shifting by the number of bands below dis_window_min
         if self.bloch_basis:
             # reshape band_data
-            band_mat = band_data.reshape(self.n_k, num_ks_bands)
+            band_mat = band_data.reshape(n_k, num_ks_bands)
         else:
             # Not used in wannier basis
             band_mat = None
@@ -632,20 +662,20 @@ class Wannier90Converter(ConverterTools):
 
             # Reformats udis_data as complex, without header
             udis_data = udis_data[:, 0] + 1j * udis_data[:, 1]
-            udis_data = udis_data.reshape((self.n_k, num_wf*num_ks_bands+1))[:, 1:]
-            udis_data = udis_data.reshape((self.n_k, num_wf, num_ks_bands))
+            udis_data = udis_data.reshape((n_k, num_wf*num_ks_bands+1))[:, 1:]
+            udis_data = udis_data.reshape((n_k, num_wf, num_ks_bands))
 
             #initiate U disentanglement matrices and fill from file "seedname_u_dis.mat"
-            udis_mat = numpy.zeros([self.n_k, num_ks_bands, num_wf], dtype=complex)
-            for ik in range(self.n_k):
+            udis_mat = numpy.zeros([n_k, num_ks_bands, num_wf], dtype=complex)
+            for ik in range(n_k):
                 udis_mat[ik, inside_window[ik]] = udis_data[ik, :, :n_inside_per_k[ik]].T
                 assert numpy.allclose(udis_data[ik, :, n_inside_per_k[ik]:], 0)
         else:
             # no disentanglement; fill udis_mat with identity
-            udis_mat = numpy.array([numpy.identity(num_wf,dtype=complex)] * self.n_k)
+            udis_mat = numpy.array([numpy.identity(num_wf,dtype=complex)] * n_k)
 
         # return the data into variables
-        return nrpt, rvec_idx, rvec_deg, num_wf, h_of_r, u_mat, udis_mat, band_mat
+        return nrpt, rvec_idx, rvec_deg, num_wf, h_of_r, u_mat, udis_mat, band_mat, k_mesh
 
     def find_rot_mat(self, n_sh, sh_lst, sh_map, ham0):
         """
@@ -767,7 +797,7 @@ class Wannier90Converter(ConverterTools):
 
         return succeeded, rot_mat
 
-    def kmesh_build(self, msize=None, mmode=0):
+    def kmesh_build(self, msize, mmode=0):
         """
         Method for the generation of the k-point mesh.
         Right now it only supports the option for generating a full grid containing k=0,0,0.
@@ -793,18 +823,16 @@ class Wannier90Converter(ConverterTools):
         if mmode != 0:
             raise ValueError("Mesh generation mode not supported: %s" % mmode)
 
+        assert len(msize) == 3
+
         # a regular mesh including Gamma point
         # total number of k-points
-        nkpt = msize[0] * msize[1] * msize[2]
-        kpts = numpy.zeros((nkpt, 3), dtype=float)
-        ii = 0
-        for ix, iy, iz in product(list(range(msize[0])), list(range(msize[1])), list(range(msize[2]))):
-            kpts[ii, :] = [float(ix) / msize[0], float(iy) /
-                            msize[1], float(iz) / msize[2]]
-            ii += 1
+        nkpt = numpy.prod(msize)
+        kpts = numpy.array(list(product(range(msize[0]), range(msize[1]), range(msize[2]))))
+        kpts = kpts / numpy.array(msize)
         # weight is equal for all k-points because wannier90 uses uniform grid on whole BZ
         # (normalization is always 1 and takes into account spin degeneracy)
-        wk = numpy.ones([nkpt], dtype=float) / float(nkpt)
+        wk = numpy.full(nkpt, 1/nkpt)
 
         return nkpt, kpts, wk
 
@@ -825,14 +853,12 @@ class Wannier90Converter(ConverterTools):
 
         """
 
-        twopi = 2 * numpy.pi
         h_of_k = [numpy.zeros((self.nwfs, self.nwfs), dtype=complex)
                   for ik in range(self.n_k)]
         ridx = numpy.array(list(range(self.nrpt)))
         for ik, ir in product(list(range(self.n_k)), ridx):
-            rdotk = twopi * numpy.dot(self.kpts[ik], self.rvec[ir])
-            factor = (math.cos(rdotk) + 1j * math.sin(rdotk)) / \
-                float(self.rdeg[ir])
+            rdotk = numpy.dot(self.kpts[ik], self.rvec[ir])
+            factor = numpy.exp(2j * numpy.pi * rdotk) / self.rdeg[ir]
             h_of_k[ik][:, :] += factor * h_of_r[ir][:, :]
 
         return h_of_k
