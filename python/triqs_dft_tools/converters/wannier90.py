@@ -24,7 +24,7 @@
 #  Wannier90 to HDF5 converter for the SumkDFT class of dfttools/TRIQS;
 #
 #   written by Gabriele Sclauzero (Materials Theory, ETH Zurich), Dec 2015 -- Jan 2016,
-#   updated by Maximilian Merkel (Materials Theory, ETH Zurich), Aug 2020,
+#   updated by Maximilian Merkel (Materials Theory, ETH Zurich), Aug 2020 -- Jan 2021,
 #   and by Sophie Beck (Materials Theory, ETH Zurich), Sep 2020,
 #   under the supervision of Claude Ederer (Materials Theory).
 #   Partially based on previous work by K. Dymkovski and the DFT_tools/TRIQS team.
@@ -259,7 +259,7 @@ class Wannier90Converter(ConverterTools):
             mpi.report(
                 "\nThe Hamiltonian in MLWF basis is extracted from %s files..." % file_seed)
             (nr, rvec, rdeg, nw, hamr, u_mat, udis_mat,
-             band_mat, k_mesh_from_umat) = self.read_wannier90data(file_seed)
+             band_mat, k_mesh_from_umat) = self.read_wannier90data(file_seed, kmesh_mode)
             # number of R vectors, their indices, their degeneracy, number of
             # WFs, H(R)
             mpi.report("\n... done: %d R vectors, %d WFs found" % (nr, nw))
@@ -281,6 +281,7 @@ class Wannier90Converter(ConverterTools):
                     # the size of the k-point mesh is determined from the
                     # largest R vector
                     nki = [2 * rvec[:, idir].max() + 1 for idir in range(3)]
+                    assert numpy.prod(nki) == self.nrpt
                     # it will be the same as in the win only when nki is odd, because of the
                     # wannier90 convention: if we have nki k-points along the i-th direction,
                     # then we should get 2*(nki/2)+nki%2 R points along that
@@ -366,7 +367,6 @@ class Wannier90Converter(ConverterTools):
             if os.path.isfile(self.w90_seed + '.nscf.out'):
                 fermi_weight_file = self.w90_seed + '.nscf.out'
                 print('Reading DFT band occupations from Quantum Espresso output {}'.format(fermi_weight_file))
-            # TODO: replace LOCPROJ by EIGENVAL
             elif os.path.isfile('LOCPROJ'):
                 fermi_weight_file = 'LOCPROJ'
                 print('Reading DFT band occupations from Vasp output {}'.format(fermi_weight_file))
@@ -469,7 +469,7 @@ class Wannier90Converter(ConverterTools):
                 ar[self.misc_subgrp]['dft_fermi_weights'] = f_weights
                 ar[self.misc_subgrp]['band_window'] = band_window+1 # Change to 1-based index
 
-    def read_wannier90data(self, wannier_seed="wannier"):
+    def read_wannier90data(self, wannier_seed="wannier", kmesh_mode=0):
         """
         Method for reading the seedname_hr.dat file produced by Wannier90 (http://wannier.org)
 
@@ -524,7 +524,14 @@ class Wannier90Converter(ConverterTools):
 
         k_mesh = None
 
-        if self.bloch_basis:
+        if not self.bloch_basis:
+            if kmesh_mode == -1:
+                # kpts will be determined from R grid
+                n_k = nrpt
+            else:
+                # kpts have been determined already
+                n_k = self.n_k
+        else:
             # first, read u matrices from 'seedname_u.mat'
             u_filename = wannier_seed + '_u.mat'
             with open(u_filename,'r') as u_file:
@@ -638,8 +645,8 @@ class Wannier90Converter(ConverterTools):
             u_mat = u_mat.reshape((n_k, num_wf, num_wf)).transpose((0, 2, 1))
         else:
             # Wannier basis; fill u_mat with identity
-            u_mat = numpy.zeros([self.n_k, num_wf, num_wf], dtype=complex)
-            for ik in range(self.n_k):
+            u_mat = numpy.zeros([n_k, num_wf, num_wf], dtype=complex)
+            for ik in range(n_k):
                 u_mat[ik,:,:] = numpy.identity(num_wf,dtype=complex)
 
         # now, check what is needed in the case of disentanglement:
@@ -672,7 +679,7 @@ class Wannier90Converter(ConverterTools):
                 assert numpy.allclose(udis_data[ik, :, n_inside_per_k[ik]:], 0)
         else:
             # no disentanglement; fill udis_mat with identity
-            udis_mat = numpy.array([numpy.identity(num_wf,dtype=complex)] * self.n_k)
+            udis_mat = numpy.array([numpy.identity(num_wf,dtype=complex)] * n_k)
 
         # return the data into variables
         return nrpt, rvec_idx, rvec_deg, num_wf, h_of_r, u_mat, udis_mat, band_mat, k_mesh
