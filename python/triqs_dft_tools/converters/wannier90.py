@@ -380,7 +380,9 @@ class Wannier90Converter(ConverterTools):
             print('Overwriting required density with DFT result {:.5f}'.format(density_required))
             print('and using the DFT Fermi energy {:.5f} eV\n'.format(self.fermi_energy))
 
-        mpi.report("The k-point grid has dimensions: %d, %d, %d" % tuple(nki))
+        if not self.bloch_basis:
+            mpi.report("The k-point grid has dimensions: %d, %d, %d" % tuple(nki))
+
         # if calculations are spin-polarized, then renormalize k-point weights
         if SP == 1 and SO == 0:
             kpt_weights *= 0.5
