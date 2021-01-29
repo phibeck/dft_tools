@@ -281,7 +281,6 @@ class Wannier90Converter(ConverterTools):
                     # the size of the k-point mesh is determined from the
                     # largest R vector
                     nki = [2 * rvec[:, idir].max() + 1 for idir in range(3)]
-                    assert numpy.prod(nki) == self.nrpt
                     # it will be the same as in the win only when nki is odd, because of the
                     # wannier90 convention: if we have nki k-points along the i-th direction,
                     # then we should get 2*(nki/2)+nki%2 R points along that
@@ -527,11 +526,9 @@ class Wannier90Converter(ConverterTools):
         k_mesh = None
 
         if not self.bloch_basis:
-            if kmesh_mode == -1:
-                # kpts will be determined from R grid
-                n_k = nrpt
-            else:
-                # kpts have been determined already
+            # For kmesh_mode == -1, size of automatic k mesh known when rvec_idx
+            # have been read. For kmesh_mode >= 0, kpts have been determined already
+            if kmesh_mode >= 0:
                 n_k = self.n_k
         else:
             # first, read u matrices from 'seedname_u.mat'
@@ -540,7 +537,6 @@ class Wannier90Converter(ConverterTools):
                 u_data = u_file.readlines()
             # reads number of kpoints and number of wannier functions
             n_k, num_wf_u, _ = map(int, u_data[1].split())
-            assert n_k == nrpt, 'Number of k and r points has to be identical'
             assert num_wf_u == num_wf, '#WFs must be identical for *_u.mat and *_hr.dat'
             mpi.report('reading {:20}...{}'.format(u_filename,u_data[0].strip('\n')))
 
@@ -646,6 +642,8 @@ class Wannier90Converter(ConverterTools):
             u_mat = u_mat[:, 0] + 1j * u_mat[:, 1]
             u_mat = u_mat.reshape((n_k, num_wf, num_wf)).transpose((0, 2, 1))
         else:
+            if kmesh_mode == -1:
+                n_k = numpy.prod([2 * rvec_idx[:, idir].max() + 1 for idir in range(3)])
             # Wannier basis; fill u_mat with identity
             u_mat = numpy.zeros([n_k, num_wf, num_wf], dtype=complex)
             for ik in range(n_k):
