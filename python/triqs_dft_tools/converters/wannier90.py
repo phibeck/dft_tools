@@ -51,17 +51,22 @@ import os.path
 from itertools import product
 
 from h5 import HDFArchive
-from .converter_tools import ConverterTools
+#from .converter_tools import ConverterTools
+import importlib.util                                                                                
+ct = importlib.util.spec_from_file_location('ConverterTools', 
+                '/mnt/home/sbeck/work/codes/triqs/dft_tools/python/triqs_dft_tools/converters/converter_tools.py')
+ct_tools = importlib.util.module_from_spec(ct)
+ct.loader.exec_module(ct_tools)
 import triqs.utility.mpi as mpi
 
-class Wannier90Converter(ConverterTools):
+class Wannier90Converter(ct_tools.ConverterTools):
     """
     Conversion from Wannier90 output to an hdf5 file that can be used as input for the SumkDFT class.
     """
 
     def __init__(self, seedname, hdf_filename=None, dft_subgrp='dft_input',
                  symmcorr_subgrp='dft_symmcorr_input', misc_subgrp='dft_misc_input',
-                 repacking=False, rot_mat_type='hloc_diag', bloch_basis=False):
+                 repacking=False, rot_mat_type='none', bloch_basis=False):
         """
         Initialise the class.
 
@@ -102,7 +107,8 @@ class Wannier90Converter(ConverterTools):
         self.fortran_to_replace = {'D': 'E'}
         # threshold below which matrix elements from wannier90 should be
         # considered equal
-        self._w90zero = 2.e-4
+        #self._w90zero = 2.e-4
+        self._w90zero = 5.e-1
         self.rot_mat_type = rot_mat_type
         self.bloch_basis = bloch_basis
         if self.rot_mat_type not in ('hloc_diag', 'wannier', 'none'):
@@ -111,7 +117,7 @@ class Wannier90Converter(ConverterTools):
 
         # Checks if h5 file is there and repacks it if wanted:
         if (os.path.exists(self.hdf_file) and repacking):
-            ConverterTools.repack(self)
+            ct_tools.ConverterTools.repack(self)
 
     def convert_dft_input(self):
         """
@@ -131,7 +137,7 @@ class Wannier90Converter(ConverterTools):
 
         # R is a generator : each R.Next() will return the next number in the
         # file
-        R = ConverterTools.read_fortran_file(
+        R = ct_tools.ConverterTools.read_fortran_file(
             self, self.inp_file, self.fortran_to_replace)
         shell_entries = ['atom', 'sort', 'l', 'dim']
         corr_shell_entries = ['atom', 'sort', 'l', 'dim', 'SO', 'irep']
@@ -217,7 +223,7 @@ class Wannier90Converter(ConverterTools):
 
         # determine the number of inequivalent correlated shells and maps,
         # needed for further processing
-        n_inequiv_shells, corr_to_inequiv, inequiv_to_corr = ConverterTools.det_shell_equivalence(
+        n_inequiv_shells, corr_to_inequiv, inequiv_to_corr = ct_tools.ConverterTools.det_shell_equivalence(
             self, corr_shells)
         mpi.report("Number of inequivalent shells: %d" % n_inequiv_shells)
         mpi.report("Shell representatives: " + format(inequiv_to_corr))
@@ -263,6 +269,8 @@ class Wannier90Converter(ConverterTools):
             # number of R vectors, their indices, their degeneracy, number of
             # WFs, H(R)
             mpi.report("\n... done: %d R vectors, %d WFs found" % (nr, nw))
+            hamr = numpy.kron(numpy.eye(2), hamr)
+            nw *= 2
 
             if isp == 0:
                 # set or check some quantities that must be the same for both
@@ -314,6 +322,7 @@ class Wannier90Converter(ConverterTools):
                 # n_bands_max corresponds to numpy.max(n_orbitals)
                 n_bands_max = udis_mat.shape[1]
                 n_orbitals = numpy.full([self.n_k, n_spin_blocs], n_bands_max)
+                n_orbitals *= 2
             else:
                 # consistency check between the _up and _down file contents
                 if nr != self.nrpt:
@@ -348,6 +357,9 @@ class Wannier90Converter(ConverterTools):
             if isp == 0:
                 use_rotations, rot_mat = self.find_rot_mat(
                     n_corr_shells, corr_shells, shells_map, ham_corr0)
+                if mpi.is_master_node():
+                    print(rot_mat)
+
             else:
                 # consistency check
                 use_rotations_, rot_mat_ = self.find_rot_mat(
@@ -404,7 +416,9 @@ class Wannier90Converter(ConverterTools):
             u_temp = numpy.transpose(u_total.conj(),(0,2,1))
             for icrsh in range(n_corr_shells):
                 dim = corr_shells[icrsh]['dim']
-                proj_mat[:, isp, icrsh, 0:dim, :] = u_temp[:,iorb:iorb+dim,:]
+                dim *= 2
+                #proj_mat[:, isp, icrsh, 0:dim, :] = u_temp[:,iorb:iorb+dim,:]
+                proj_mat[:, isp, icrsh, 0:dim, :] = numpy.kron(numpy.eye(2), u_temp[:,iorb:iorb+dim,:])
                 iorb += dim
 
         # Then, compute the hoppings in reciprocal space
@@ -741,6 +755,7 @@ class Wannier90Converter(ConverterTools):
             nw = sh_lst[ish]["dim"]
             # save the sub-block of H(0) corresponding to this shell
             ham0_lst[ish] = ham0[iwf:iwf+nw, iwf:iwf+nw]
+            mpi.report(ham0_lst[ish])
             # diagonalize the sub-block for this shell
             eigval, eigvec = numpy.linalg.eigh(ham0_lst[ish])
             eigval_lst[ish] = eigval
