@@ -119,6 +119,7 @@ class Wannier90Converter(ct_tools.ConverterTools):
         if (os.path.exists(self.hdf_file) and repacking):
             ct_tools.ConverterTools.repack(self)
 
+        
     def convert_dft_input(self):
         """
         Reads the appropriate files and stores the data for the
@@ -129,6 +130,17 @@ class Wannier90Converter(ct_tools.ConverterTools):
         in the hdf5 archive.
 
         """
+        # order is xz_up, yz_up, xy_up, xz_dn, yz_dn, xy_dn as given by Wannier90 without specification
+        def _lambda_matrix_w90(lam):
+            lam_loc = numpy.zeros((6,6),dtype=complex)
+            lam_loc[0,1] = -1j*lam/2.0
+            lam_loc[0,5] =  1j*lam/2.0
+            lam_loc[1,5] =    -lam/2.0
+            lam_loc[2,3] = -1j*lam/2.0
+            lam_loc[2,4] =     lam/2.0
+            lam_loc[3,4] =  1j*lam/2.0
+            lam_loc = lam_loc + numpy.transpose(numpy.conjugate(lam_loc))
+            return lam_loc
 
         # Read and write only on the master node
         if not (mpi.is_master_node()):
@@ -271,6 +283,9 @@ class Wannier90Converter(ct_tools.ConverterTools):
             mpi.report("\n... done: %d R vectors, %d WFs found" % (nr, nw))
             hamr = numpy.kron(numpy.eye(2), hamr)
             nw *= 2
+
+            hamr[nr//2] += _lambda_matrix_w90(0.1053)
+
 
             if isp == 0:
                 # set or check some quantities that must be the same for both
