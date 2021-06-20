@@ -132,7 +132,7 @@ class Wannier90Converter(ConverterTools):
         R = ConverterTools.read_fortran_file(
             self, self.inp_file, self.fortran_to_replace)
         shell_entries = ['atom', 'sort', 'l', 'dim']
-        corr_shell_entries = ['atom', 'sort', 'l', 'dim', 'SO', 'irep']
+        corr_shell_entries = ['atom', 'sort', 'l', 'dim', 'SO', 'irep', 'dupl']
         # First, let's read the input file with the parameters needed for the
         # conversion
         try:
@@ -166,6 +166,18 @@ class Wannier90Converter(ConverterTools):
                        self.inp_file)
         # close the input file
         R.close()
+
+        # insert duplicate shells
+        # go from back to front
+        for icrsh in reversed(range(n_corr_shells)):
+            if corr_shells[icrsh]['dupl'] > 0:
+                corr_shells.insert(icrsh, dict(corr_shells[icrsh]))
+                corr_shells[icrsh]['dupl'] = 0
+                corr_shells[icrsh + 1]['sort'] += 1
+                for sh in range(len(corr_shells[:icrsh + 1])):
+                    corr_shells[icrsh + 1 + sh]['atom'] += 1
+                #corr_shells[icrsh+1]['atom'] = 1
+                n_corr_shells += 1
 
         # Set or derive some quantities
         # Wannier90 does not use symmetries to reduce the k-points
@@ -208,7 +220,8 @@ class Wannier90Converter(ConverterTools):
                     entry['dim'] *= 2
                     if 'SO' in entry.keys() and self.add_lambda: entry['SO'] = 1
 
-        dim_corr_shells = sum([sh['dim'] for sh in corr_shells])
+        # count only non-duplicate orbitals
+        dim_corr_shells = sum([sh['dim'] for sh in corr_shells if sh['dupl'] == 0])
         mpi.report('Total number of WFs expected in the correlated shells: {0:d}'.format(dim_corr_shells))
 
         # build the k-point mesh, if its size was given on input (kmesh_mode >= 0),
@@ -289,6 +302,10 @@ class Wannier90Converter(ConverterTools):
                 with numpy.printoptions(linewidth=100, formatter={'complexfloat': '{:+.3f}'.format}):
                     mpi.report('Local Hamiltonian including spin-orbit coupling:')
                     mpi.report(hamr[nr//2])
+
+            if numpy.any([sh['dupl'] for sh in corr_shells]):
+                u_mat = numpy.kron(numpy.eye(2), u_mat)
+                udis_mat = numpy.kron(numpy.eye(2), udis_mat)
 
             if isp == 0:
                 # set or check some quantities that must be the same for both
@@ -481,6 +498,9 @@ class Wannier90Converter(ConverterTools):
             else:
                 # make Fourier transform H(R) -> H(k) : it can be done one spin at a time
                 hamk = self.fourier_ham(hamr_full[isp])
+                # enlargen if duplicate shell is True
+                if numpy.any([sh['dupl'] for sh in corr_shells]):
+                    hamk = numpy.kron(numpy.eye(2), hamk)
             # finally write hamk into hoppings
             for ik in range(self.n_k):
                 hopping[ik, isp] = hamk[ik] - numpy.identity(numpy.max(n_orbitals)) * self.fermi_energy
@@ -761,7 +781,7 @@ class Wannier90Converter(ConverterTools):
         succeeded = True
 
         hs = ham0.shape
-        if hs[0] != hs[1] or hs[0] != sum([sh['dim'] for sh in sh_lst]):
+        if hs[0] != hs[1] or hs[0] != sum([sh['dim'] for sh in sh_lst if sh['dupl'] == 0]):
             mpi.report(
                 "find_rot_mat: wrong block structure of input Hamiltonian!")
             # this error will lead into troubles later... early return
@@ -785,6 +805,7 @@ class Wannier90Converter(ConverterTools):
         for ish in range(n_sh):
             # nw = number of orbitals in this shell
             nw = sh_lst[ish]["dim"]
+            if sh_lst[ish]['dupl'] == 1: iwf -= nw
             # save the sub-block of H(0) corresponding to this shell
             ham0_lst[ish] = ham0[iwf:iwf+nw, iwf:iwf+nw]
             # diagonalize the sub-block for this shell
