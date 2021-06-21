@@ -104,7 +104,7 @@ class Wannier90Converter(ConverterTools):
         self.fortran_to_replace = {'D': 'E'}
         # threshold below which matrix elements from wannier90 should be
         # considered equal
-        self._w90zero = 2.e-6
+        self._w90zero = 2.e-1
         self.rot_mat_type = rot_mat_type
         self.bloch_basis = bloch_basis
         self.add_lambda = add_lambda
