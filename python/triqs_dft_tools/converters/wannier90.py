@@ -174,7 +174,7 @@ class Wannier90Converter(ConverterTools):
                 corr_shells.insert(icrsh, dict(corr_shells[icrsh]))
                 corr_shells[icrsh]['dupl'] = 0
                 corr_shells[icrsh + 1]['sort'] += 1
-                for sh in range(len(corr_shells[:icrsh + 1])):
+                for sh in range(len(corr_shells[icrsh + 1:])):
                     corr_shells[icrsh + 1 + sh]['atom'] += 1
                 #corr_shells[icrsh+1]['atom'] = 1
                 n_corr_shells += 1
