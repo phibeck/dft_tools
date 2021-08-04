@@ -364,7 +364,6 @@ def raman_vertex(sumk,ik,direction,code,options=None):
 
     return ram_vert
 
-
 def init_spectroscopy(sum_k, code='wien2k', w90_params={}):
     r"""
     Reads all necessary quantities for transport calculations from transport subgroup of the hdf5 archive.
@@ -846,5 +845,4 @@ def conductivity_and_seebeck(Gamma_w, omega, Om_mesh, SP, directions, beta, meth
                 print("Raman conductivity in direction %s for Omega = %.2f       %f  x 10^4 Ohm^-1 cm^-1" % (direction, Om_mesh[iq], raman_cond[direction][iq]))
 
         return raman_cond
-
 
