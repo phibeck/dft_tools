@@ -31,6 +31,9 @@ from .symmetry import *
 from .sumk_dft import SumkDFT
 from scipy.integrate import *
 from scipy.interpolate import *
+import wannierberri as wb
+from wannierberri.__Data_K import Data_K
+from scipy import constants as constants
 
 if not hasattr(numpy, 'full'):
     # polyfill full for older numpy:
@@ -1109,7 +1112,7 @@ class SumkDFTTools(SumkDFT):
         return vol_c, vol_p
 
     # Uses .data of only GfReFreq objects.
-    def transport_distribution(self, beta, directions=['xx'], energy_window=None, Om_mesh=[0.0], with_Sigma=False, n_om=None, broadening=0.0):
+    def transport_distribution(self, beta, directions=['xx'], energy_window=None, Om_mesh=[0.0], with_Sigma=False, n_om=None, broadening=0.0, code='wien2k'):
         r"""
         Calculates the transport distribution
 
@@ -1140,23 +1143,42 @@ class SumkDFTTools(SumkDFT):
             with_Sigma = False.
         broadening : double, optional
             Lorentzian broadening. It is necessary to specify the boradening if with_Sigma = False, otherwise this parameter can be set to 0.0.
+        code : string
+            DFT code from which velocities are being read. Options: 'wien2k', 'wannier90'
         """
 
-        # Check if wien converter was called and read transport subgroup form
-        # hdf file
-        if mpi.is_master_node():
-            ar = HDFArchive(self.hdf_file, 'r')
-            if not (self.transp_data in ar):
-                raise IOError("transport_distribution: No %s subgroup in hdf file found! Call convert_transp_input first." % self.transp_data)
-            # check if outputs file was converted
-            if not ('n_symmetries' in ar['dft_misc_input']):
-                raise IOError("transport_distribution: n_symmetries missing. Check if case.outputs file is present and call convert_misc_input() or convert_dft_input().")
+        if code in ('wien2k'):
+            # Check if wien converter was called and read transport subgroup form
+            # hdf file
+            if mpi.is_master_node():
+                ar = HDFArchive(self.hdf_file, 'r')
+                if not (self.transp_data in ar):
+                    raise IOError("transport_distribution: No %s subgroup in hdf file found! Call convert_transp_input first." % self.transp_data)
+                # check if outputs file was converted
+                if not ('n_symmetries' in ar['dft_misc_input']):
+                    raise IOError("transport_distribution: n_symmetries missing. Check if case.outputs file is present and call convert_misc_input() or convert_dft_input().")
 
-        self.read_transport_input_from_hdf()
+            self.read_transport_input_from_hdf()
+            cell_volume = self.cellvolume(self.lattice_type, self.lattice_constants, self.lattice_angles)[1]
+            n_symmetries = self.n_symmetries
+
+        elif code in ('wannier90'):
+            # calculate velocity
+            wberri = wb.System_w90('/mnt/home/sbeck/Dropbox/ccqlin030/sro/I4_mmm_prim/wan_conv_12_v/sro', berry=True)
+            grid = wb.Grid(wberri, NKdiv=1, NKFFT=[12,12,12])
+            dataK = Data_K(wberri, dK=[0.0,0.0,0.0], grid=grid)
+            #dataK = wb.__Data_K.Data_K(wberri, dK=[0.0,0.0,0.0], grid=grid)
+            velocities_k = dataK.V_H - dataK.A_Hbar * 1j*( dataK.E_K[:,None,:,None] - dataK.E_K[:,:,None,None] )
+
+            self.read_transport_input_from_hdf()
+            AUTOANG = constants.physical_constants['Bohr radius'][0]/constants.angstrom
+            cell_volume = dataK.cell_volume / AUTOANG ** 3
+            n_symmetries = 1
 
         if mpi.is_master_node():
+            k_dep_enforce_value = 1 if code in ('wien2k') else 0
             # k-dependent-projections.
-            assert self.k_dep_projection == 1, "transport_distribution: k dependent projection is not implemented!"
+            assert self.k_dep_projection == k_dep_enforce_value, "transport_distribution: k dependent projection is not implemented!"
             # positive Om_mesh
             assert all(
                 Om >= 0.0 for Om in Om_mesh), "transport_distribution: Om_mesh should not contain negative values!"
@@ -1272,7 +1294,10 @@ class SumkDFTTools(SumkDFT):
                 # loop over all symmetries
                 for R in self.rot_symmetries:
                     # get transformed velocity under symmetry R
-                    vel_R = copy.deepcopy(self.velocities_k[isp][ik])
+                    if code in ('wien2k'):
+                        vel_R = copy.deepcopy(self.velocities_k[isp][ik])
+                    elif code in ('wannier90'):
+                        vel_R = copy.deepcopy(velocities_k[ik])
                     for nu1 in range(self.band_window_optics[isp][ik, 1] - self.band_window_optics[isp][ik, 0] + 1):
                         for nu2 in range(self.band_window_optics[isp][ik, 1] - self.band_window_optics[isp][ik, 0] + 1):
                             vel_R[nu1][nu2][:] = numpy.dot(
@@ -1291,8 +1316,7 @@ class SumkDFTTools(SumkDFT):
                                                                               A_kw[isp][A_i, A_i, iw]).trace().real * self.bz_weights[ik])
 
         for direction in self.directions:
-            self.Gamma_w[direction] = (mpi.all_reduce(mpi.world, self.Gamma_w[direction], lambda x, y: x + y)
-                                       / self.cellvolume(self.lattice_type, self.lattice_constants, self.lattice_angles)[1] / self.n_symmetries)
+            self.Gamma_w[direction] = (mpi.all_reduce(mpi.world, self.Gamma_w[direction], lambda x, y: x + y) / cell_volume / n_symmetries)
 
     def transport_coefficient(self, direction, iq, n, beta, method=None):
         r"""
