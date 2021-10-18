@@ -31,9 +31,12 @@ from .symmetry import *
 from .sumk_dft import SumkDFT
 from scipy.integrate import *
 from scipy.interpolate import *
+from scipy import constants as constants
+from itertools import product
 import wannierberri as wb
 from wannierberri.__Data_K import Data_K
-from scipy import constants as constants
+from triqs_tprf.wannier90 import *
+from triqs_tprf.tight_binding import *
 
 if not hasattr(numpy, 'full'):
     # polyfill full for older numpy:
@@ -1074,6 +1077,17 @@ class SumkDFTTools(SumkDFT):
         self.read_input_from_hdf(
             subgrp=self.misc_data, things_to_read=thingstoread)
 
+    def read_transport_input_from_hdf_wannier90(self):
+        r"""
+        Reads the data for transport calculations from the hdf5 archive.
+        """
+        thingstoread = ['band_window_optics', 'nk_optics']
+        self.read_input_from_hdf(
+            subgrp=self.transp_data, things_to_read=thingstoread)
+        thingstoread = ['band_window', 'n_symmetries', 'rot_symmetries']
+        self.read_input_from_hdf(
+            subgrp=self.misc_data, things_to_read=thingstoread)
+
     def cellvolume(self, lattice_type, lattice_constants, latticeangle):
         r"""
         Determines the conventional und primitive unit cell volumes.
@@ -1146,6 +1160,9 @@ class SumkDFTTools(SumkDFT):
         code : string
             DFT code from which velocities are being read. Options: 'wien2k', 'wannier90'
         """
+        BOHRTOANG = constants.physical_constants['Bohr radius'][0]/constants.angstrom
+        HARTREETOEV = constants.physical_constants['Hartree energy'][0]/constants.eV
+        n_inequiv_spin_blocks = self.SP + 1 - self.SO
 
         if code in ('wien2k'):
             # Check if wien converter was called and read transport subgroup form
@@ -1163,17 +1180,105 @@ class SumkDFTTools(SumkDFT):
             n_symmetries = self.n_symmetries
 
         elif code in ('wannier90'):
-            # calculate velocity
-            wberri = wb.System_w90('/mnt/home/sbeck/Dropbox/ccqlin030/sro/I4_mmm_prim/wan_conv_12_v/sro', berry=True)
-            grid = wb.Grid(wberri, NKdiv=1, NKFFT=[12,12,12])
-            dataK = Data_K(wberri, dK=[0.0,0.0,0.0], grid=grid)
-            #dataK = wb.__Data_K.Data_K(wberri, dK=[0.0,0.0,0.0], grid=grid)
-            velocities_k = dataK.V_H - dataK.A_Hbar * 1j*( dataK.E_K[:,None,:,None] - dataK.E_K[:,:,None,None] )
 
-            self.read_transport_input_from_hdf()
-            AUTOANG = constants.physical_constants['Bohr radius'][0]/constants.angstrom
-            cell_volume = dataK.cell_volume / AUTOANG ** 3
+            # read in transport input
+            self.read_transport_input_from_hdf_wannier90()
+            # checks for right formatting of self.nk_optics
+            assert len(self.nk_optics) in [1,3], '"nk_optics" must be given as three integers or one float'
+            if len(self.nk_optics) == 1: assert np.array(list(self.nk_optics)).dtype in (int, float), '"nk_optics" single value must be float or integer'
+            if len(self.nk_optics) == 3: assert np.array(list(self.nk_optics)).dtype == int, '"nk_optics" mesh must be integers'
             n_symmetries = 1
+
+            # calculate velocity
+            #wberri = wb.System_w90('/mnt/home/sbeck/Dropbox/ccqlin030/sro/I4_mmm_prim/wan_conv_12_v/sro', berry=True)
+            pathname = './'
+            seedname = 'sro'
+            fermi = 0.
+            if len(self.nk_optics) == 1:
+                interpolate_factor = self.nk_optics[0]
+                nk_x, nk_y, nk_z = list(map(lambda i: int(numpy.ceil(interpolate_factor * len(set(self.kpts[:,i])))), range(3)))
+            else:
+                nk_x, nk_y, nk_z = self.nk_optics
+                #nk_x, nk_y, nk_z = 10
+                #nk_x, nk_y, nk_z = 12
+                #nk_x, nk_y, nk_z = 34
+            n_orb = numpy.max([self.n_orbitals[ik][0] for ik in range(self.n_k)])
+            shift_gamma = [0.0,0.0,0.0]
+            #shift_gamma = [0.015,0.015,0.015]
+            things_to_modify = {'bz_weights': None, 'hopping': None, 'kpt_weights': None, 'kpts': None,
+                                'n_k': None, 'n_orbitals': None, 'proj_mat': None, 'band_window': None, 'band_window_optics': None}
+            things_to_store = dict.fromkeys(things_to_modify, None)
+
+            # initialize variables
+            n_kpts = nk_x * nk_y * nk_z
+            kpts = numpy.zeros((n_kpts, 3))
+            hopping = numpy.zeros((n_kpts, 1, n_orb, n_orb), dtype=complex)
+            proj_mat = numpy.zeros(numpy.shape(hopping[:,0,0,0]) + numpy.shape(self.proj_mat[0,:]), dtype=complex)
+            if mpi.is_master_node():
+                print(hopping.shape, self.proj_mat.shape, numpy.shape(hopping[:,0,0,0]) + numpy.shape(self.proj_mat[0,:]))
+            # simple modifications
+            things_to_modify['n_k'] = n_kpts
+            things_to_modify['n_orbitals'] = numpy.full((n_kpts, 1), n_orb)
+            for key in ['bz_weights', 'kpt_weights']:
+                things_to_modify[key] = numpy.full(n_kpts, 1/n_kpts)
+            n_inequiv_spin_blocks = self.SP + 1 - self.SO
+            for key in ['band_window', 'band_window_optics']:
+                things_to_modify[key] = [numpy.full((n_kpts, 2), self.band_window[isp][0]) for isp in range(n_inequiv_spin_blocks)]
+
+            velocities_k = None
+            cell_volume = None
+            kpts = None
+
+            if mpi.is_master_node():
+                # initialize WannierBerri system
+                wberri = wb.System_w90(pathname + seedname, berry=True)
+                grid = wb.Grid(wberri, NKdiv=1, NKFFT=[nk_x, nk_y, nk_z])
+                dataK = Data_K(wberri, dK=shift_gamma, grid=grid)
+
+                # construct velocities from dataK
+                V_H_diag = numpy.zeros(numpy.shape(dataK.V_H), dtype=complex)
+                V_H_diag[:, range(V_H_diag.shape[1]), range(V_H_diag.shape[1]), :] = numpy.diagonal(dataK.V_H[:,:,:,:],axis1=1, axis2=2).transpose(0,2,1).copy()
+                velocities_k = ( V_H_diag - dataK.A_Hbar * 1j*( dataK.E_K[:,None,:,None] - dataK.E_K[:,:,None,None] ) ) / HARTREETOEV / BOHRTOANG
+                #velocities_k =  V_H_diag / HARTREETOEV / BOHRTOANG
+
+                # read in hoppings and proj_mat
+                hopping[:,0,range(hopping.shape[2]),range(hopping.shape[3])] = dataK.E_K
+                for isp in range(n_inequiv_spin_blocks):
+                    iorb = 0
+                    for icrsh in range(self.n_corr_shells):
+                        dim = self.corr_shells[icrsh]['dim']
+                        proj_mat[:,isp,icrsh,0:dim,:] = dataK.UU_K[:,iorb:iorb+dim,:]
+                        iorb += dim
+
+                # read in rest from dataK
+                cell_volume = dataK.cell_volume / BOHRTOANG ** 3
+                kpts = dataK.kpoints_all
+
+            # broadcast everything
+            velocities_k = mpi.bcast(velocities_k)
+            cell_volume = mpi.bcast(cell_volume)
+            kpts = mpi.bcast(kpts)
+            hopping = mpi.bcast(hopping)
+            proj_mat = mpi.bcast(proj_mat)
+
+            # upgrade sumk quantities for interpolation
+            things_to_modify['kpts'] = kpts
+            things_to_modify['hopping'] = hopping
+            things_to_modify['proj_mat'] = proj_mat
+            mpi.barrier()
+
+            if mpi.is_master_node():
+                print(self.n_k, nk_x, nk_y, nk_z)
+            for key in things_to_modify:
+                things_to_store[key] = getattr(self, key)
+                setattr(self, key, things_to_modify[key])
+                #if mpi.is_master_node():
+                    #print(key, things_to_store[key] )
+                    #print(getattr(self, key))
+            # write velocities to file
+            if mpi.is_master_node():
+                ar = HDFArchive(self.hdf_file, 'a')
+                ar['dft_transp_input']['velocities_k'] = velocities_k
 
         if mpi.is_master_node():
             k_dep_enforce_value = 1 if code in ('wien2k') else 0
@@ -1198,7 +1303,6 @@ class SumkDFTTools(SumkDFT):
                 "####################################################################\n")
 
         # up and down are equivalent if SP = 0
-        n_inequiv_spin_blocks = self.SP + 1 - self.SO
         self.directions = directions
         dir_to_int = {'x': 0, 'y': 1, 'z': 2}
 
@@ -1263,6 +1367,8 @@ class SumkDFTTools(SumkDFT):
 
         self.Gamma_w = {direction: numpy.zeros(
             (len(self.Om_mesh), n_om), dtype=numpy.float_) for direction in self.directions}
+        max_orb = numpy.max([self.n_orbitals[ik][0] for ik in range(self.n_k)])
+        #Akw_write = numpy.zeros((self.n_k, max_orb, max_orb, n_om), dtype=numpy.complex_)
 
         # Sum over all k-points
         ikarray = numpy.array(list(range(self.n_k)))
@@ -1281,6 +1387,7 @@ class SumkDFTTools(SumkDFT):
                 for iw in range(n_om):
                     A_kw[isp][:, :, iw] = -1.0 / (2.0 * numpy.pi * 1j) * (
                         A_kw[isp][:, :, iw] - numpy.conjugate(numpy.transpose(A_kw[isp][:, :, iw])))
+                #Akw_write[ik] = A_kw[isp].copy() * self.bz_weights[ik]
 
                 b_min = max(self.band_window[isp][
                             ik, 0], self.band_window_optics[isp][ik, 0])
@@ -1315,7 +1422,16 @@ class SumkDFTTools(SumkDFT):
                                                                                                   A_kw[isp][A_i, A_i, int(iw + iOm_mesh[iq])]), vel_R[v_i, v_i, dir_to_int[direction[1]]]),
                                                                               A_kw[isp][A_i, A_i, iw]).trace().real * self.bz_weights[ik])
 
+        #Akw_write = mpi.all_reduce(mpi.world, Akw_write, lambda x, y: x + y)
+        #mpi.barrier()
+        #if mpi.is_master_node():
+        #    ar = HDFArchive(self.hdf_file, 'a')
+        #    ar.create_group('Akw')
+        #    ar['Akw'] = numpy.sum(numpy.trace(Akw_write, axis1=1, axis2=2), axis=0)
+
         for direction in self.directions:
+            if mpi.is_master_node():
+                print(direction, cell_volume, n_symmetries)
             self.Gamma_w[direction] = (mpi.all_reduce(mpi.world, self.Gamma_w[direction], lambda x, y: x + y) / cell_volume / n_symmetries)
 
     def transport_coefficient(self, direction, iq, n, beta, method=None):
