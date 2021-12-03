@@ -1180,6 +1180,8 @@ class SumkDFTTools(SumkDFT):
             n_symmetries = self.n_symmetries
 
         elif code in ('wannier90'):
+            # check if spin-unpolarized
+            assert n_inequiv_spin_blocks == 1, "Spin-polarized optical conductivity calculations not implemented with Wannier90"
 
             # read in transport input
             self.read_transport_input_from_hdf_wannier90()
@@ -1281,9 +1283,8 @@ class SumkDFTTools(SumkDFT):
                 ar['dft_transp_input']['velocities_k'] = velocities_k
 
         if mpi.is_master_node():
-            k_dep_enforce_value = 1 if code in ('wien2k') else 0
             # k-dependent-projections.
-            assert self.k_dep_projection == k_dep_enforce_value, "transport_distribution: k dependent projection is not implemented!"
+            assert self.k_dep_projection == 0, "transport_distribution: k dependent projection is not implemented!"
             # positive Om_mesh
             assert all(
                 Om >= 0.0 for Om in Om_mesh), "transport_distribution: Om_mesh should not contain negative values!"
