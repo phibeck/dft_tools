@@ -100,10 +100,7 @@ def write_output_to_hdf(hdf_file, things_to_save, subgrp='user_data'):
             if it in [ "gf_struct_sumk", "gf_struct_solver",
                     "solver_to_sumk", "sumk_to_solver", "solver_to_sumk_block"]:
                 warn("It is not recommended to save '{}' individually. Save 'block_structure' instead.".format(it))
-            try:
-                ar[subgrp][it] = getattr(self, it)
-            except:
-                mpi.report("%s not found, and so not saved." % it)
+            ar[subgrp][it] = it
 
 def cellvolume(lattice_type, lattice_constants, latticeangle):
     r"""
@@ -377,9 +374,10 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
 
         # check some of the input
         pathname = w90_params['pathname'] if 'pathname' in w90_params else './'
-        filename = [pathname, w90_params['seedname'], '.wout']
         assert all(isinstance(name, str) for name in ['seedname', 'pathname']), f'Check pathname {w90_params["pathname"]} and seedname {w90_params["seedname"]}'
-        assert os.path.isfile(''.join(filename)), f'Filename {"".join(filename)} does not exist!' 
+        for file_ending in ['.wout', '_hr.dat', '.chk', '.mmn', '.eig']:
+            filename = [pathname, w90_params['seedname'], file_ending]
+            assert os.path.isfile(''.join(filename)), f'Filename {"".join(filename)} does not exist!' 
         calc_velocity = w90_params['calc_velocity'] if 'calc_velocity' in w90_params else True
         calc_inverse_mass = w90_params['calc_inverse_mass'] if 'pathname' in w90_params else False
         assert all(isinstance(name, bool) for name in [calc_velocity, calc_inverse_mass]), f'Parameter {calc_velocity} or {calc_inverse_mass} not bool!'
