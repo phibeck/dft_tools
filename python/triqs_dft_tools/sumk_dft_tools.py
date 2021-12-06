@@ -35,8 +35,6 @@ from scipy import constants as constants
 from itertools import product
 import wannierberri as wb
 from wannierberri.__Data_K import Data_K
-from triqs_tprf.wannier90 import *
-from triqs_tprf.tight_binding import *
 
 if not hasattr(numpy, 'full'):
     # polyfill full for older numpy:
