@@ -34,7 +34,6 @@ from scipy.interpolate import *
 from scipy import constants as constants
 from itertools import product
 import wannierberri as wb
-from wannierberri.__Data_K import Data_K
 
 if not hasattr(numpy, 'full'):
     # polyfill full for older numpy:

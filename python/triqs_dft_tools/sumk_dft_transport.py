@@ -226,10 +226,10 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
 
     if mpi.is_master_node():
         # initialize WannierBerri system
-        shift_gamma = [0.0,0.0,0.0]
-        wberri = wb.System_w90(pathname + seedname, berry=True)
+        shift_gamma = numpy.array([0.0,0.0,0.0])
+        wberri = wb.System_w90(pathname + seedname, berry=True, fft='numpy')
         grid = wb.Grid(wberri, NKdiv=1, NKFFT=[nk_x, nk_y, nk_z])
-        dataK = wb.__Data_K.Data_K(wberri, dK=shift_gamma, grid=grid)
+        dataK = wb.data_K.Data_K(wberri, dK=shift_gamma, grid=grid, fftlib='numpy')
 
         # read in hoppings and proj_mat
         hopping[:,0,range(hopping.shape[2]),range(hopping.shape[3])] = dataK.E_K
@@ -242,15 +242,16 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
 
         if calc_velocity:
             # construct velocities from dataK
-            V_H_diag = numpy.zeros(numpy.shape(dataK.V_H), dtype=complex)
-            V_H_diag[:, range(V_H_diag.shape[1]), range(V_H_diag.shape[1]), :] = numpy.einsum('knna -> kna', dataK.V_H)
-            velocities_k = ( V_H_diag - dataK.A_Hbar * 1j*( dataK.E_K[:,None,:,None] - dataK.E_K[:,:,None,None] ) ) / HARTREETOEV / BOHRTOANG
+            V_H_diag = numpy.zeros(numpy.shape(dataK.Xbar('Ham', 1)), dtype=complex)
+            V_H_diag[:, range(V_H_diag.shape[1]), range(V_H_diag.shape[1]), :] = numpy.einsum('knna -> kna', dataK.Xbar('Ham', 1))
+            velocities_k = ( V_H_diag - dataK.Xbar('AA') * 1j*( dataK.E_K[:,None,:,None] - dataK.E_K[:,:,None,None] ) ) / HARTREETOEV / BOHRTOANG
             
         if calc_inverse_mass:
-            V_dot_D = numpy.einsum('kmnab, knoab -> kmoab', dataK.V_H[:,:,:,:,None], dataK.D_H[:,:,:,None,:])
+            V_dot_D = numpy.einsum('kmnab, knoab -> kmoab', dataK.Xbar('Ham', 1)[:,:,:,:,None], dataK.D_H[:,:,:,None,:])
             V_dot_D_dagger = V_dot_D.conj().transpose(0,2,1,3,4)
             V_curly = numpy.einsum('knnab -> knab', V_dot_D + V_dot_D_dagger)
-            inverse_mass = dataK.del2E_H_diag + V_curly
+            del2E_H_diag = numpy.einsum('knnab->knab', dataK.Xbar('Ham', 2)).real
+            inverse_mass = del2E_H_diag + V_curly
 
         # read in rest from dataK
         cell_volume = dataK.cell_volume / BOHRTOANG ** 3
