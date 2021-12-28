@@ -303,8 +303,33 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
 
 # ----------------- transport -----------------------
 
+def raman_vertex(sumk,ik,R,direction,code,options=None):
+    if code in ('wien2k'):
+        assert 0, 'Raman for wien2k not yet implemented' #ToDo
+    # elif code in ('wannier90'):
+    dir_names=['xx','yy','zz','B1g','B2g']
+    dir_array=[ [[1,0,0],[0,0,0],[0,0,0]],
+                [[0,0,0],[0,1,0],[0,0,0]],
+                [[0,0,0],[0,0,0],[0,0,1]],
+                [[0,1,0],[0,0,0],[0,0,0]], # [[0,0.5,0],[0.5,0,0],[0,0,0]],
+                [[0.5,0,0],[0,-0.5,0],[0,0,0]] ]
+    dir_array=[numpy.array(el,dtype=numpy.float_) for el in dir_array]
+
+    if direction in dir_names:
+        idir = dir_names.index(direction)
+    else:
+        assert 0,'raman_vertex: direction %s is not supported'%direction
+    isp = 0
+    n_bands = sumk.n_orbitals[ik][isp]
+    ram_vert = numpy.zeros( (n_bands, n_bands), dtype=complex)
+    for i in range(n_bands):
+        ram_vert[i,i]=numpy.dot(dir_array[idir],sumk.inverse_mass[ik,i,:,:]).trace()
+    
+    return ram_vert
+
+
 # Uses .data of only GfReFreq objects.
-def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, Om_mesh=[0.0], with_Sigma=False, n_om=None, broadening=0.0, code='wien2k', **w90_params):
+def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, Om_mesh=[0.0], with_Sigma=False, n_om=None, broadening=0.0, code='wien2k', mode='optics', **w90_params):
     r"""
     Calculates the transport distribution
 
@@ -337,6 +362,8 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
         Lorentzian broadening. It is necessary to specify the boradening if with_Sigma = False, otherwise this parameter can be set to 0.0.
     code : string
         DFT code from which velocities are being read. Options: 'wien2k', 'wannier90'
+    mode : string
+        ToDo
     w90_params : dictionary
         additional keywords necessary in case code == 'wannier90'
 
@@ -380,7 +407,7 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
             filename = [pathname, w90_params['seedname'], file_ending]
             assert os.path.isfile(''.join(filename)), f'Filename {"".join(filename)} does not exist!' 
         calc_velocity = w90_params['calc_velocity'] if 'calc_velocity' in w90_params else True
-        calc_inverse_mass = w90_params['calc_inverse_mass'] if 'pathname' in w90_params else False
+        calc_inverse_mass = w90_params['calc_inverse_mass'] if 'calc_inverse_mass' in w90_params else False
         assert all(isinstance(name, bool) for name in [calc_velocity, calc_inverse_mass]), f'Parameter {calc_velocity} or {calc_inverse_mass} not bool!'
 
         # recompute sum_k instances on denser grid 
@@ -498,28 +525,50 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
             v_i = slice(b_min - sum_k.band_window_optics[isp][
                         ik, 0], b_max - sum_k.band_window_optics[isp][ik, 0] + 1)
 
-            # loop over all symmetries
-            for R in sum_k.rot_symmetries:
-                # get transformed velocity under symmetry R
-                if code in ('wien2k'):
-                    vel_R = copy.deepcopy(sum_k.velocities_k[isp][ik])
-                elif code in ('wannier90'):
-                    vel_R = copy.deepcopy(sum_k.velocities_k[ik])
-                for nu1 in range(sum_k.band_window_optics[isp][ik, 1] - sum_k.band_window_optics[isp][ik, 0] + 1):
-                    for nu2 in range(sum_k.band_window_optics[isp][ik, 1] - sum_k.band_window_optics[isp][ik, 0] + 1):
-                        vel_R[nu1][nu2][:] = numpy.dot(
-                            R, vel_R[nu1][nu2][:])
+            if mode in ('optics'):
+                # loop over all symmetries
+                for R in sum_k.rot_symmetries:
+                    # get transformed velocity under symmetry R
+                    if code in ('wien2k'):
+                        vel_R = copy.deepcopy(sum_k.velocities_k[isp][ik])
+                    elif code in ('wannier90'):
+                        vel_R = copy.deepcopy(sum_k.velocities_k[ik])
+                    for nu1 in range(sum_k.band_window_optics[isp][ik, 1] - sum_k.band_window_optics[isp][ik, 0] + 1):
+                        for nu2 in range(sum_k.band_window_optics[isp][ik, 1] - sum_k.band_window_optics[isp][ik, 0] + 1):
+                            vel_R[nu1][nu2][:] = numpy.dot(
+                                R, vel_R[nu1][nu2][:])
 
-                # calculate Gamma_w for each direction from the velocities
-                # vel_R and the spectral function A_kw
-                for direction in directions:
-                    for iw in range(n_om):
-                        for iq in range(len(temp_Om_mesh)):
-                            if(iw + iOm_mesh[iq] >= n_om or omega[iw] < -temp_Om_mesh[iq] + energy_window[0] or omega[iw] > temp_Om_mesh[iq] + energy_window[1]):
-                                continue
+                    # calculate Gamma_w for each direction from the velocities
+                    # vel_R and the spectral function A_kw
+                    for direction in directions:
+                        for iw in range(n_om):
+                            for iq in range(len(temp_Om_mesh)):
+                                if(iw + iOm_mesh[iq] >= n_om or omega[iw] < -temp_Om_mesh[iq] + energy_window[0] or omega[iw] > temp_Om_mesh[iq] + energy_window[1]):
+                                    continue
 
-                            Gamma_w[direction][iq, iw] += (numpy.dot(numpy.dot(numpy.dot(vel_R[v_i, v_i, dir_to_int[direction[0]]], A_kw[isp][A_i, A_i, int(iw + iOm_mesh[iq])]),
-                                                                               vel_R[v_i, v_i, dir_to_int[direction[1]]]), A_kw[isp][A_i, A_i, iw]).trace().real * sum_k.bz_weights[ik])
+                                Gamma_w[direction][iq, iw] += (numpy.dot(numpy.dot(numpy.dot(vel_R[v_i, v_i, dir_to_int[direction[0]]], A_kw[isp][A_i, A_i, int(iw + iOm_mesh[iq])]),
+                                                                                vel_R[v_i, v_i, dir_to_int[direction[1]]]), A_kw[isp][A_i, A_i, iw]).trace().real * sum_k.bz_weights[ik])
+            elif mode in ('raman'):
+                # ToDo: check that if code in ('wannier90') then inverse_mass was calculated
+                # loop over all symmetries
+                for R in sum_k.rot_symmetries:
+                    for direction in directions:
+                        # calculate the raman vertex for each direction
+                        if code in ('wien2k'):
+                            assert 0, 'Raman for wien2k not yet implemented' #ToDo
+                        elif code in ('wannier90'):
+                            # To delete # sum_k.inverse_mass = calc_inverse_mass
+                            # vert = raman_vertex(ik,R,direction,code,raman_options)
+                            vert = raman_vertex(sum_k, ik, R, direction, code)#,raman_options)
+
+                        for iw in range(n_om):
+                            for iq in range(len(Om_mesh)):
+                                if(iw + iOm_mesh[iq] >= n_om or omega[iw] < -Om_mesh[iq] + energy_window[0] or omega[iw] > Om_mesh[iq] + energy_window[1]):
+                                    continue
+                                
+                                Gamma_w[direction][iq, iw] += (numpy.dot(numpy.dot(numpy.dot(vert[v_i, v_i], A_kw[isp][A_i, A_i, int(iw + iOm_mesh[iq])]),
+                                                                             vert[v_i, v_i]), A_kw[isp][A_i, A_i, iw]).trace().real * sum_k.bz_weights[ik])
+
 
     for direction in directions:
         Gamma_w[direction] = (mpi.all_reduce(mpi.world, Gamma_w[direction], lambda x, y: x + y) / cell_volume / sum_k.n_symmetries)
@@ -593,7 +642,7 @@ def transport_coefficient(Gamma_w, omega, Om_mesh, spin_polarization, direction,
         A = numpy.nan
     return A
 
-def conductivity_and_seebeck(Gamma_w, omega, Om_mesh, SP, directions, beta, method=None):
+def conductivity_and_seebeck(Gamma_w, omega, Om_mesh, SP, directions, beta, method=None, mode='optics'):
     r"""
     Calculates the Seebeck coefficient and the optical conductivity by calling
     :meth:`transport_coefficient <dft.sumk_dft_tools.SumkDFTTools.transport_coefficient>`.
@@ -617,17 +666,19 @@ def conductivity_and_seebeck(Gamma_w, omega, Om_mesh, SP, directions, beta, meth
     method : string
         Integration method: cubic spline and scipy.integrate.quad ('quad'), simpson rule ('simps'), trapezoidal rule ('trapz'), rectangular integration (otherwise)
         Note that the sampling points of the the self-energy are used!
+    mode : string
+        Choose between optical conductivity/seebeck/Kappa ('optics') or Raman conductivity ('raman')
 
     Returns
     -------
     optic_cond : dictionary of double vectors
-                 Optical conductivity in each direction and frequency given by Om_mesh.
+        Optical conductivity in each direction and frequency given by Om_mesh.
 
     seebeck : dictionary of double
-              Seebeck coefficient in each direction. If zero is not present in Om_mesh the Seebeck coefficient is set to NaN.
+        Seebeck coefficient in each direction. If zero is not present in Om_mesh the Seebeck coefficient is set to NaN.
 
     kappa : dictionary of double.
-            thermal conductivity in each direction. If zero is not present in Om_mesh the thermal conductivity is set to NaN
+        thermal conductivity in each direction. If zero is not present in Om_mesh the thermal conductivity is set to NaN
     """
 
     if not (mpi.is_master_node()):
@@ -637,33 +688,47 @@ def conductivity_and_seebeck(Gamma_w, omega, Om_mesh, SP, directions, beta, meth
 
     # initialization
     A0 = {direction: numpy.full((n_q,), numpy.nan) for direction in directions}
-    A1 = {direction: numpy.full((n_q,), numpy.nan) for direction in directions}
-    A2 = {direction: numpy.full((n_q,), numpy.nan) for direction in directions}
-    optic_cond = {direction: numpy.full((n_q,), numpy.nan) for direction in directions}
-    seebeck = {direction: numpy.nan for direction in directions}
-    kappa = {direction: numpy.nan for direction in directions}
+    if mode in ('optics'):
+        A1 = {direction: numpy.full((n_q,), numpy.nan) for direction in directions}
+        A2 = {direction: numpy.full((n_q,), numpy.nan) for direction in directions}
+        optic_cond = {direction: numpy.full((n_q,), numpy.nan) for direction in directions}
+        seebeck = {direction: numpy.nan for direction in directions}
+        kappa = {direction: numpy.nan for direction in directions}
 
-    for direction in directions:
-        for iq in range(n_q):
-            A0[direction][iq] = transport_coefficient(Gamma_w, omega, Om_mesh, SP, direction, iq=iq, n=0, beta=beta, method=method)
-            A1[direction][iq] = transport_coefficient(Gamma_w, omega, Om_mesh, SP, direction, iq=iq, n=1, beta=beta, method=method)
-            A2[direction][iq] = transport_coefficient(Gamma_w, omega, Om_mesh, SP, direction, iq=iq, n=2, beta=beta, method=method)
-            print("A_0 in direction %s for Omega = %.2f    %e a.u." % (direction, Om_mesh[iq], A0[direction][iq]))
-            print("A_1 in direction %s for Omega = %.2f    %e a.u." % (direction, Om_mesh[iq], A1[direction][iq]))
-            print("A_2 in direction %s for Omega = %.2f    %e a.u." % (direction, Om_mesh[iq], A2[direction][iq]))
-            if ~numpy.isnan(A1[direction][iq]):
-                # Seebeck and kappa are overwritten if there is more than one Omega =
-                # 0 in Om_mesh
-                seebeck[direction] = - A1[direction][iq] / A0[direction][iq] * 86.17
-                kappa[direction] = A2[direction][iq] - A1[direction][iq]*A1[direction][iq]/A0[direction][iq]
-                kappa[direction] *= 293178.0
-        optic_cond[direction] = beta * A0[direction] * 10700.0 / numpy.pi
-        for iq in range(n_q):
-            print("Conductivity in direction %s for Omega = %.2f       %f  x 10^4 Ohm^-1 cm^-1" % (direction, Om_mesh[iq], optic_cond[direction][iq]))
-            if not (numpy.isnan(A1[direction][iq])):
-                print("Seebeck in direction      %s for Omega = 0.00      %f  x 10^(-6) V/K" % (direction, seebeck[direction]))
-                print("kappa in direction      %s for Omega = 0.00      %f  W/(m * K)" % (direction, kappa[direction]))
+        for direction in directions:
+            for iq in range(n_q):
+                A0[direction][iq] = transport_coefficient(Gamma_w, omega, Om_mesh, SP, direction, iq=iq, n=0, beta=beta, method=method)
+                A1[direction][iq] = transport_coefficient(Gamma_w, omega, Om_mesh, SP, direction, iq=iq, n=1, beta=beta, method=method)
+                A2[direction][iq] = transport_coefficient(Gamma_w, omega, Om_mesh, SP, direction, iq=iq, n=2, beta=beta, method=method)
+                print("A_0 in direction %s for Omega = %.2f    %e a.u." % (direction, Om_mesh[iq], A0[direction][iq]))
+                print("A_1 in direction %s for Omega = %.2f    %e a.u." % (direction, Om_mesh[iq], A1[direction][iq]))
+                print("A_2 in direction %s for Omega = %.2f    %e a.u." % (direction, Om_mesh[iq], A2[direction][iq]))
+                if ~numpy.isnan(A1[direction][iq]):
+                    # Seebeck and kappa are overwritten if there is more than one Omega =
+                    # 0 in Om_mesh
+                    seebeck[direction] = - A1[direction][iq] / A0[direction][iq] * 86.17
+                    kappa[direction] = A2[direction][iq] - A1[direction][iq]*A1[direction][iq]/A0[direction][iq]
+                    kappa[direction] *= 293178.0
+            optic_cond[direction] = beta * A0[direction] * 10700.0 / numpy.pi
+            for iq in range(n_q):
+                print("Conductivity in direction %s for Omega = %.2f       %f  x 10^4 Ohm^-1 cm^-1" % (direction, Om_mesh[iq], optic_cond[direction][iq]))
+                if not (numpy.isnan(A1[direction][iq])):
+                    print("Seebeck in direction      %s for Omega = 0.00      %f  x 10^(-6) V/K" % (direction, seebeck[direction]))
+                    print("kappa in direction      %s for Omega = 0.00      %f  W/(m * K)" % (direction, kappa[direction]))
 
-    return optic_cond, seebeck, kappa
+        return optic_cond, seebeck, kappa
+
+    elif mode in ('raman'):
+        raman_cond = {direction: numpy.full((n_q,), numpy.nan) for direction in directions}
+
+        for direction in directions:
+            for iq in range(n_q):
+                A0[direction][iq] = transport_coefficient(Gamma_w, omega, Om_mesh, SP, direction, iq=iq, n=0, beta=beta, method=method)
+                print("A_0 in direction %s for Omega = %.2f    %e a.u." % (direction, Om_mesh[iq], A0[direction][iq]))
+            raman_cond[direction] = beta * A0[direction] * 10700.0 / numpy.pi
+            for iq in range(n_q):
+                print("Raman conductivity in direction %s for Omega = %.2f       %f  x 10^4 Ohm^-1 cm^-1" % (direction, Om_mesh[iq], raman_cond[direction][iq]))
+
+        return raman_cond
 
 
