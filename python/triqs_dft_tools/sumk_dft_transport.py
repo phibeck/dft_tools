@@ -96,11 +96,11 @@ def write_output_to_hdf(hdf_file, things_to_save, subgrp='user_data'):
         return  # do nothing on nodes
     with HDFArchive(hdf_file, 'a') as ar:
         if not subgrp in ar: ar.create_group(subgrp)
-        for it in things_to_save:
+        for it, val in things_to_save.items():
             if it in [ "gf_struct_sumk", "gf_struct_solver",
                     "solver_to_sumk", "sumk_to_solver", "solver_to_sumk_block"]:
                 warn("It is not recommended to save '{}' individually. Save 'block_structure' instead.".format(it))
-            ar[subgrp][it] = it
+            ar[subgrp][it] = val
 
 def cellvolume(lattice_type, lattice_constants, latticeangle):
     r"""
