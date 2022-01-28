@@ -78,7 +78,7 @@ def read_transport_input_from_hdf_wannier90(sum_k):
 
     return sum_k
 
-def write_output_to_hdf(hdf_file, things_to_save, subgrp='user_data'):
+def write_output_to_hdf(sum_k, things_to_save, subgrp='user_data'):
     r"""
     Saves data from a list into the HDF file. Prints a warning if a requested data is not found in SumkDFT object.
 
@@ -94,7 +94,7 @@ def write_output_to_hdf(hdf_file, things_to_save, subgrp='user_data'):
 
     if not (mpi.is_master_node()):
         return  # do nothing on nodes
-    with HDFArchive(hdf_file, 'a') as ar:
+    with HDFArchive(sum_k.hdf_file, 'a') as ar:
         if not subgrp in ar: ar.create_group(subgrp)
         for it, val in things_to_save.items():
             if it in [ "gf_struct_sumk", "gf_struct_solver",
@@ -303,22 +303,37 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
 
 # ----------------- transport -----------------------
 
-def raman_vertex(sumk,ik,R,direction,code,options=None):
+def raman_vertex(sumk,ik,direction,code,options=None):
     if code in ('wien2k'):
         assert 0, 'Raman for wien2k not yet implemented' #ToDo
     # elif code in ('wannier90'):
-    dir_names=['xx','yy','zz','B1g','B2g']
+    dir_names=['xx','yy','zz','B2g','B1g']
     dir_array=[ [[1,0,0],[0,0,0],[0,0,0]],
                 [[0,0,0],[0,1,0],[0,0,0]],
                 [[0,0,0],[0,0,0],[0,0,1]],
-                [[0,1,0],[0,0,0],[0,0,0]], # [[0,0.5,0],[0.5,0,0],[0,0,0]],
+                [[0,1,0],[0,0,0],[0,0,0]],
                 [[0.5,0,0],[0,-0.5,0],[0,0,0]] ]
-    dir_array=[numpy.array(el,dtype=numpy.float_) for el in dir_array]
+    # Load custom directions
+    if "custom_dir" in options:
+        assert isinstance(options["custom_dir"],dict), "raman_vertex: in options, custom_dir must be a dictionary"
+        for dire in options["custom_dir"]:
+            assert numpy.shape(numpy.array(options["custom_dir"][dire]))==(3,3), "raman_vertex: custom_dir must have shape 3x3 (a numpy array or a nested list)"
+            if dire in dir_names:
+                if ik==0 and direction==dire: 
+                    mpi.report("Warning: the direction %s was already loaded and will be replace with the one provided in custom_dir"%dire)
+                idir = dir_names.index(dire)
+                # dir_names[idir]=direction
+                dir_array[idir]=options["custom_dir"][dire]
+            else:
+                dir_names.append(dire)
+                dir_array.append(options["custom_dir"][dire])
+    
+    dir_array=[numpy.array(el,dtype=numpy.float_) for el in dir_array] # convert list to numpy array
 
     if direction in dir_names:
         idir = dir_names.index(direction)
     else:
-        assert 0,'raman_vertex: direction %s is not supported'%direction
+        assert 0,'raman_vertex: direction %s is not supported by default. Try to add it by raman_vertex options custom_dir.'%direction
     isp = 0
     n_bands = sumk.n_orbitals[ik][isp]
     ram_vert = numpy.zeros( (n_bands, n_bands), dtype=complex)
@@ -329,7 +344,7 @@ def raman_vertex(sumk,ik,R,direction,code,options=None):
 
 
 # Uses .data of only GfReFreq objects.
-def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, Om_mesh=[0.0], with_Sigma=False, n_om=None, broadening=0.0, code='wien2k', mode='optics', **w90_params):
+def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, Om_mesh=[0.0], with_Sigma=False, n_om=None, broadening=0.0, code='wien2k', mode='optics', raman_options={}, **w90_params):
     r"""
     Calculates the transport distribution
 
@@ -363,7 +378,9 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
     code : string
         DFT code from which velocities are being read. Options: 'wien2k', 'wannier90'
     mode : string
-        ToDo
+        Choose between optical ('optics') or Raman ('raman') transport distribution.
+    raman_options : dictionary
+        additional keywords necessary in case mode == 'raman'. Depending on the situation, the allow keys could be 'custom_dir'.
     w90_params : dictionary
         additional keywords necessary in case code == 'wannier90'
 
@@ -558,8 +575,7 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
                             assert 0, 'Raman for wien2k not yet implemented' #ToDo
                         elif code in ('wannier90'):
                             # To delete # sum_k.inverse_mass = calc_inverse_mass
-                            # vert = raman_vertex(ik,R,direction,code,raman_options)
-                            vert = raman_vertex(sum_k, ik, R, direction, code)#,raman_options)
+                            vert = raman_vertex(sum_k, ik, direction, code, raman_options)
 
                         for iw in range(n_om):
                             for iq in range(len(Om_mesh)):
