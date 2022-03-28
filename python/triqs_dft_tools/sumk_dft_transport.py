@@ -29,7 +29,8 @@ from scipy import constants as constants
 import wannierberri as wb
 import os.path
 
-__all__ = ['transport_distribution', 'conductivity_and_seebeck', 'write_output_to_hdf']
+__all__ = ['transport_distribution', 'conductivity_and_seebeck', 'write_output_to_hdf',
+           'init_spectroscopy', 'transport_function']
 
 # ----------------- helper functions -----------------------
 
@@ -139,7 +140,7 @@ def cellvolume(lattice_type, lattice_constants, latticeangle):
 
     return vol_c, vol_p
 
-def fermi_dis(w, beta):
+def fermi_dis(w, beta, der=0):
     r"""
     Fermi distribution.
 
@@ -152,13 +153,21 @@ def fermi_dis(w, beta):
        frequency
     beta : double
        inverse temperature
+    der : integer
+       order of derivative
 
     Returns
     -------
     f : double
     """
     exponent = numpy.float128(w * beta)
-    return 1.0 / (numpy.exp(exponent) + 1)
+    fermi = 1.0 / (numpy.exp(exponent) + 1)
+    if der == 0:
+        return fermi
+    elif der == 1:
+        return - beta * fermi ** 2 * numpy.exp(exponent) 
+    else:
+        raise('higher order of derivative than 1 not implemented')
 
 def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='./', calc_velocity=False, calc_inverse_mass=False):
     r"""
@@ -343,58 +352,30 @@ def raman_vertex(sumk,ik,direction,code,options=None):
     return ram_vert
 
 
-# Uses .data of only GfReFreq objects.
-def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, Om_mesh=[0.0], with_Sigma=False, n_om=None, broadening=0.0, code='wien2k', mode='optics', raman_options={}, **w90_params):
+def init_spectroscopy(sum_k, code='wien2k', w90_params={}):
     r"""
-    Calculates the transport distribution
-
-    .. math::
-       \Gamma_{\alpha\beta}\left(\omega+\Omega/2, \omega-\Omega/2\right) = \frac{1}{V} \sum_k Tr\left(v_{k,\alpha}A_{k}(\omega+\Omega/2)v_{k,\beta}A_{k}\left(\omega-\Omega/2\right)\right)
-
-    in the direction :math:`\alpha\beta`. The velocities :math:`v_{k}` are read from the transport subgroup of the hdf5 archive.
+    Reads all necessary quantities for transport calculations from transport subgroup of the hdf5 archive.
+    Performs checks on input. Uses interpolation if code=wannier90.
 
     Parameters
     ----------
     sum_k : sum_k object
             triqs SumkDFT object
-    beta : double
-        Inverse temperature :math:`\beta`.
-    directions : list of string, optional
-        :math:`\alpha\beta` e.g.: ['xx','yy','zz','xy','xz','yz'].
-    energy_window : list of double, optional
-        Specifies the upper and lower limit of the frequency integration for :math:`\Omega=0.0`. The window is automatically enlarged by the largest :math:`\Omega` value,
-        hence the integration is performed in the interval [energy_window[0]-max(Om_mesh), energy_window[1]+max(Om_mesh)].
-    Om_mesh : list of double, optional
-        :math:`\Omega` frequency mesh of the optical conductivity. For the conductivity and the Seebeck coefficient :math:`\Omega=0.0` has to be
-        part of the mesh. In the current version Om_mesh is repined to the mesh provided by the self-energy! The actual mesh is printed on the screen and given as output.
-    with_Sigma : boolean, optional
-        Determines whether the calculation is performed with or without self energy. If this parameter is set to False the self energy is set to zero (i.e. the DFT band
-        structure :math:`A(k,\omega)` is used). Note: For with_Sigma=False it is necessary to specify the parameters energy_window, n_om and broadening.
-    n_om : integer, optional
-        Number of equidistant frequency points in the interval [energy_window[0]-max(Om_mesh), energy_window[1]+max(Om_mesh)]. This parameters is only used if
-        with_Sigma = False.
-    broadening : double, optional
-        Lorentzian broadening. It is necessary to specify the boradening if with_Sigma = False, otherwise this parameter can be set to 0.0.
     code : string
         DFT code from which velocities are being read. Options: 'wien2k', 'wannier90'
-    mode : string
-        Choose between optical ('optics') or Raman ('raman') transport distribution.
-    raman_options : dictionary
-        additional keywords necessary in case mode == 'raman'. Depending on the situation, the allow keys could be 'custom_dir'.
-    w90_params : dictionary
+    w90_params : dictionary, optional
         additional keywords necessary in case code == 'wannier90'
 
     Returns
     -------
-    Gamma_w : dictionary of double matrices 
-              transport distribution function in each direction, frequency given by Om_mesh_out and omega 
-    omega : list of double
-            omega vector
-    Om_mesh_out : list of double
-                  frequency mesh of the optical conductivity recomputed on the mesh provided by the self energy
+    sum_k : sum_k object
+            triqs SumkDFT object, interpolated
+    cell_volume : double
+            primitive unit cell volume
     """
 
     n_inequiv_spin_blocks = sum_k.SP + 1 - sum_k.SO
+    # up and down are equivalent if SP = 0
 
     # ----------------- set-up input from DFT -----------------------
     if code in ('wien2k'):
@@ -428,18 +409,71 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
         assert all(isinstance(name, bool) for name in [calc_velocity, calc_inverse_mass]), f'Parameter {calc_velocity} or {calc_inverse_mass} not bool!'
 
         # recompute sum_k instances on denser grid 
-        sum_k, cell_volume, things_to_store = recompute_w90_input_on_different_mesh(sum_k, w90_params['seedname'], nk_optics=w90_params['nk_optics'], pathname=pathname,
-                                                                                    calc_velocity=calc_velocity, calc_inverse_mass=calc_inverse_mass)
+        sum_k, cell_volume, _ = recompute_w90_input_on_different_mesh(sum_k, w90_params['seedname'], nk_optics=w90_params['nk_optics'], pathname=pathname,
+                                                                      calc_velocity=calc_velocity, calc_inverse_mass=calc_inverse_mass)
 
-    if mpi.is_master_node():
-        # k-dependent-projections.
-        assert sum_k.k_dep_projection == 0, "transport_distribution: k dependent projection is not implemented!"
-        # positive Om_mesh
-        assert all(
-            Om >= 0.0 for Om in Om_mesh), "transport_distribution: Om_mesh should not contain negative values!"
+    # k-dependent-projections.
+    assert sum_k.k_dep_projection == 0, "transport_distribution: k dependent projection is not implemented!"
 
+    return sum_k, cell_volume
+
+# Uses .data of only GfReFreq objects.
+def transport_distribution(sum_k, beta, cell_volume, directions=['xx'], energy_window=None, Om_mesh=[0.0], with_Sigma=False, n_om=None, broadening=0.0, code='wien2k', mode='optics', raman_options={}):
+    r"""
+    Calculates the transport distribution
+
+    .. math::
+       \Gamma_{\alpha\beta}\left(\omega+\Omega/2, \omega-\Omega/2\right) = \frac{1}{V} \sum_k Tr\left(v_{k,\alpha}A_{k}(\omega+\Omega/2)v_{k,\beta}A_{k}\left(\omega-\Omega/2\right)\right)
+
+    in the direction :math:`\alpha\beta`. The velocities :math:`v_{k}` are read from the transport subgroup of the hdf5 archive.
+
+    Parameters
+    ----------
+    sum_k : sum_k object
+            triqs SumkDFT object
+    beta : double
+        Inverse temperature :math:`\beta`.
+    cell_volume : double
+            primitive unit cell volume
+    directions : list of string, optional
+        :math:`\alpha\beta` e.g.: ['xx','yy','zz','xy','xz','yz'].
+    energy_window : list of double, optional
+        Specifies the upper and lower limit of the frequency integration for :math:`\Omega=0.0`. The window is automatically enlarged by the largest :math:`\Omega` value,
+        hence the integration is performed in the interval [energy_window[0]-max(Om_mesh), energy_window[1]+max(Om_mesh)].
+    Om_mesh : list of double, optional
+        :math:`\Omega` frequency mesh of the optical conductivity. For the conductivity and the Seebeck coefficient :math:`\Omega=0.0` has to be
+        part of the mesh. In the current version Om_mesh is repined to the mesh provided by the self-energy! The actual mesh is printed on the screen and given as output.
+    with_Sigma : boolean, optional
+        Determines whether the calculation is performed with or without self energy. If this parameter is set to False the self energy is set to zero (i.e. the DFT band
+        structure :math:`A(k,\omega)` is used). Note: For with_Sigma=False it is necessary to specify the parameters energy_window, n_om and broadening.
+    n_om : integer, optional
+        Number of equidistant frequency points in the interval [energy_window[0]-max(Om_mesh), energy_window[1]+max(Om_mesh)]. This parameters is only used if
+        with_Sigma = False.
+    broadening : double, optional
+        Lorentzian broadening. It is necessary to specify the boradening if with_Sigma = False, otherwise this parameter can be set to 0.0.
+    code : string
+        DFT code from which velocities are being read. Options: 'wien2k', 'wannier90'
+    mode : string
+        Choose between optical ('optics') or Raman ('raman') transport distribution.
+    raman_options : dictionary
+        additional keywords necessary in case mode == 'raman'. Depending on the situation, the allow keys could be 'custom_dir'.
+
+    Returns
+    -------
+    Gamma_w : dictionary of double matrices 
+              transport distribution function in each direction, frequency given by Om_mesh_out and omega 
+    omega : list of double
+            omega vector
+    Om_mesh_out : list of double
+                  frequency mesh of the optical conductivity recomputed on the mesh provided by the self energy
+    """
+
+    n_inequiv_spin_blocks = sum_k.SP + 1 - sum_k.SO
+    # up and down are equivalent if SP = 0
+
+    # positive om_mesh
+    assert all(Om >= 0.0 for Om in Om_mesh), "transport_distribution: Om_mesh should not contain negative values!"
     # Check if energy_window is sufficiently large and correct
-
     if (energy_window[0] >= energy_window[1] or energy_window[0] >= 0 or energy_window[1] <= 0):
         assert 0, "transport_distribution: energy_window wrong!"
 
@@ -451,9 +485,6 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
             "transport_distribution: WARNING - energy window might be too narrow!")
         mpi.report(
             "####################################################################\n")
-
-    # up and down are equivalent if SP = 0
-    dir_to_int = {'x': 0, 'y': 1, 'z': 2}
 
     # ----------------- calculate A(k,w) -----------------------
 
@@ -498,6 +529,8 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
         mesh = [energy_window[0] -
                 max(Om_mesh), energy_window[1] + max(Om_mesh), n_om]
         mu = 0.0
+
+    dir_to_int = {'x': 0, 'y': 1, 'z': 2}
 
     # Define mesh for optic conductivity
     d_omega = round(numpy.abs(omega[0] - omega[1]), 12)
@@ -590,6 +623,54 @@ def transport_distribution(sum_k, beta, directions=['xx'], energy_window=None, O
         Gamma_w[direction] = (mpi.all_reduce(mpi.world, Gamma_w[direction], lambda x, y: x + y) / cell_volume / sum_k.n_symmetries)
 
     return Gamma_w, omega, temp_Om_mesh
+
+def transport_function(beta, directions, hopping, velocities, energy_window, n_om):
+    r"""
+    Calculates the transport function
+
+    .. math::
+       \Gamma_{\alpha\beta}\left(\omega+\Omega/2, \omega-\Omega/2\right) = \frac{1}{V} \sum_k Tr\left(v_{k,\alpha}A_{k}(\omega+\Omega/2)v_{k,\beta}A_{k}\left(\omega-\Omega/2\right)\right)
+
+    in the direction :math:`\alpha\beta`. The velocities :math:`v_{k}` are read from the transport subgroup of the hdf5 archive.
+
+    Parameters
+    ----------
+    beta : double
+        Inverse temperature :math:`\beta`.
+    directions : list of string, optional
+        :math:`\alpha\beta` e.g.: ['xx','yy','zz','xy','xz','yz'].
+    hopping : double array
+        Hamiltonian in band basis :math:`\epsilon(k)`
+    veolcities : complex array
+        matrix elements derivative of Hamiltonian :math:`\frac{d\epsilon(k)}{dk}`
+    energy_window : list of double
+        Specifies the upper and lower limit of the frequency integration for :math:`\Omega=0.0`. The window is automatically enlarged by the largest :math:`\Omega` value,
+        hence the integration is performed in the interval [energy_window[0]-max(Om_mesh), energy_window[1]+max(Om_mesh)].
+    n_om : integer
+        Number of equidistant frequency points in the interval [energy_window[0]-max(Om_mesh), energy_window[1]+max(Om_mesh)]. This parameters is only used if
+        with_Sigma = False.
+
+    Returns
+    -------
+    transp_func : dictionary of double array
+              transport function in each direction, frequencies given by energy_window 
+    """
+
+    dir_to_int = {'x': 0, 'y': 1, 'z': 2}
+
+    tol = 1/beta
+    orb_1, orb_2 = velocities.shape[1:3]
+    ws = numpy.linspace(energy_window[0], energy_window[1], n_om)
+    transp_func = {direction: numpy.zeros(shape=(ws.shape[0])) for direction in directions}
+
+    for ct, w in enumerate(ws):
+        idx = numpy.where(numpy.abs(hopping[:,0,range(orb_1),range(orb_2)].real - w) <= tol)
+        fermi_wg = fermi_dis(hopping[:,0,range(orb_1),range(orb_2)][idx].real - w, beta, 1)/fermi_dis(0., beta, 1)
+        for direction in directions:
+            dir_a, dir_b = [dir_to_int[x] for x in direction]
+            transp_func[direction][ct] = numpy.sum(fermi_wg * velocities[:,range(orb_1),range(orb_2),dir_a][idx] * velocities[:,range(orb_1),range(orb_2),dir_b][idx], axis=0).real
+
+    return transp_func
 
 def transport_coefficient(Gamma_w, omega, Om_mesh, spin_polarization, direction, iq, n, beta, method=None):
     r"""
