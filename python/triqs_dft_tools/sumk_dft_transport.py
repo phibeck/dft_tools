@@ -510,8 +510,8 @@ def transport_distribution(sum_k, beta, cell_volume, directions=['xx'], energy_w
             for icrsh in range(sum_k.n_corr_shells):
                 Sigma_save = sum_k.Sigma_imp_w[icrsh].copy()
                 spn = sum_k.spin_block_names[sum_k.corr_shells[icrsh]['SO']]
-                glist = lambda: [GfReFreq(indices=inner, window=(omega[
-                                          0], omega[-1]), n_points=n_om) for block, inner in sum_k.gf_struct_sumk[icrsh]]
+                glist = lambda: [GfReFreq(target_shape=(block_dim, block_dim), window=(omega[
+                                          0], omega[-1]), n_points=n_om) for block, block_dim in sum_k.gf_struct_sumk[icrsh]]
                 sum_k.Sigma_imp_w[icrsh] = BlockGf(
                     name_list=spn, block_list=glist(), make_copies=False)
                 for i, g in sum_k.Sigma_imp_w[icrsh]:
