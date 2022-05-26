@@ -30,7 +30,7 @@ import wannierberri as wb
 import os.path
 
 __all__ = ['transport_distribution', 'conductivity_and_seebeck', 'write_output_to_hdf',
-           'init_spectroscopy', 'transport_function']
+           'init_spectroscopy', 'transport_function', 'raman_vertex']
 
 # ----------------- helper functions -----------------------
 
@@ -316,12 +316,14 @@ def raman_vertex(sumk,ik,direction,code,options=None):
     if code in ('wien2k'):
         assert 0, 'Raman for wien2k not yet implemented' #ToDo
     # elif code in ('wannier90'):
-    dir_names=['xx','yy','zz','B2g','B1g']
-    dir_array=[ [[1,0,0],[0,0,0],[0,0,0]],
-                [[0,0,0],[0,1,0],[0,0,0]],
-                [[0,0,0],[0,0,0],[0,0,1]],
-                [[0,1,0],[0,0,0],[0,0,0]],
-                [[0.5,0,0],[0,-0.5,0],[0,0,0]] ]
+    dir_names=['xx','yy','zz','B2g','B1g','A1g','Eg']
+    dir_array=[ [[1.,0.,0.],[0.,0.,0.],[0.,0.,0.]],
+                [[0.,0.,0.],[0.,1.,0.],[0.,0.,0.]],
+                [[0.,0.,0.],[0.,0.,0.],[0.,0.,1.]],
+                [[0.,1.,0.],[0.,0.,0.],[0.,0.,0.]],
+                [[0.5,0.,0.],[0.,-0.5,0.],[0.,0.,0.]],
+                [[0.,0.,0.],[0.,0.,0.],[0.,0.,1.]],
+                [[0.,0.,1.],[0.,0.,0.],[0.,0.,0.]] ]
     # Load custom directions
     if "custom_dir" in options:
         assert isinstance(options["custom_dir"],dict), "raman_vertex: in options, custom_dir must be a dictionary"
@@ -599,7 +601,8 @@ def transport_distribution(sum_k, beta, cell_volume, directions=['xx'], energy_w
                                 Gamma_w[direction][iq, iw] += (numpy.dot(numpy.dot(numpy.dot(vel_R[v_i, v_i, dir_to_int[direction[0]]], A_kw[isp][A_i, A_i, int(iw + iOm_mesh[iq])]),
                                                                                 vel_R[v_i, v_i, dir_to_int[direction[1]]]), A_kw[isp][A_i, A_i, iw]).trace().real * sum_k.bz_weights[ik])
             elif mode in ('raman'):
-                # ToDo: check that if code in ('wannier90') then inverse_mass was calculated
+                if code in ('wannier90'):
+                    assert hasattr(sum_k,"inverse_mass"), 'inverse_mass not available in sum_k. Set calc_inverse_mass=True in w90_params.'
                 # loop over all symmetries
                 for R in sum_k.rot_symmetries:
                     for direction in directions:
@@ -629,9 +632,9 @@ def transport_function(beta, directions, hopping, velocities, energy_window, n_o
     Calculates the transport function
 
     .. math::
-       \Gamma_{\alpha\beta}\left(\omega+\Omega/2, \omega-\Omega/2\right) = \frac{1}{V} \sum_k Tr\left(v_{k,\alpha}A_{k}(\omega+\Omega/2)v_{k,\beta}A_{k}\left(\omega-\Omega/2\right)\right)
+       \Phi_\alpha\beta(\omega) = \sum_k v_{k,\alpha} v_{k,\beta} \delta(\omega-\varepsilon)
 
-    in the direction :math:`\alpha\beta`. The velocities :math:`v_{k}` are read from the transport subgroup of the hdf5 archive.
+    in the direction :math:`\alpha\beta`. 
 
     Parameters
     ----------
