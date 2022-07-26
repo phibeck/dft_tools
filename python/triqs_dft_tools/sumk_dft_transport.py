@@ -25,7 +25,7 @@ from triqs.gf import *
 import triqs.utility.mpi as mpi
 from .symmetry import *
 from .sumk_dft import SumkDFT
-from scipy import constants as constants
+import scipy.constants as cst
 import wannierberri as wb
 import os.path
 
@@ -199,8 +199,8 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
                       dictionary of datasets to be temporarily overwritten
     """
 
-    BOHRTOANG = constants.physical_constants['Bohr radius'][0]/constants.angstrom
-    HARTREETOEV = constants.physical_constants['Hartree energy'][0]/constants.eV
+    BOHRTOANG = cst.physical_constants['Bohr radius'][0]/cst.angstrom
+    HARTREETOEV = cst.physical_constants['Hartree energy'][0]/cst.eV
     n_inequiv_spin_blocks = sum_k.SP + 1 - sum_k.SO
 
     # set-up k mesh depending on input shape
@@ -236,7 +236,10 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
     if mpi.is_master_node():
         # initialize WannierBerri system
         shift_gamma = numpy.array([0.0,0.0,0.0])
-        wberri = wb.System_w90(pathname + seedname, berry=True, fft='numpy')
+        #wberri = wb.System_w90(pathname + seedname, berry=True, fft='numpy')
+        # WannierBerri uses python multiprocessing which might conflict with mpi.
+        # if there's a segfault, uncomment the following line
+        wberri = wb.System_w90(pathname + seedname, berry=True, fft='numpy', npar=16)
         grid = wb.Grid(wberri, NKdiv=1, NKFFT=[nk_x, nk_y, nk_z])
         dataK = wb.data_K.Data_K(wberri, dK=shift_gamma, grid=grid, fftlib='numpy')
 
@@ -809,7 +812,10 @@ def conductivity_and_seebeck(Gamma_w, omega, Om_mesh, SP, directions, beta, meth
                     seebeck[direction] = - A1[direction][iq] / A0[direction][iq] * 86.17
                     kappa[direction] = A2[direction][iq] - A1[direction][iq]*A1[direction][iq]/A0[direction][iq]
                     kappa[direction] *= 293178.0
-            optic_cond[direction] = beta * A0[direction] * 10700.0 / numpy.pi
+
+            # factor for optical conductivity: hbar * velocity_Hartree_to_SI * volume_Hartree_to_SI * m_to_cm * 10^-4 final unit
+            convert_to_SI = cst.hbar * (cst.c * cst.fine_structure) **2 * (1/cst.physical_constants['Bohr radius'][0]) **3 * 1e-6
+            optic_cond[direction] = beta * convert_to_SI * A0[direction]
             for iq in range(n_q):
                 print("Conductivity in direction %s for Omega = %.2f       %f  x 10^4 Ohm^-1 cm^-1" % (direction, Om_mesh[iq], optic_cond[direction][iq]))
                 if not (numpy.isnan(A1[direction][iq])):
