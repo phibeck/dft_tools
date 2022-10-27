@@ -418,7 +418,9 @@ def init_spectroscopy(sum_k, code='wien2k', w90_params={}):
                                                                       calc_velocity=calc_velocity, calc_inverse_mass=calc_inverse_mass)
 
     # k-dependent-projections.
-    assert sum_k.k_dep_projection == 0, "transport_distribution: k dependent projection is not implemented!"
+    # to be checked. But this should be obsolete atm, works for both cases
+    # k_dep_projection is nowhere used
+    # assert sum_k.k_dep_projection == 0, "transport_distribution: k dependent projection is not implemented!"
 
     return sum_k, cell_volume
 

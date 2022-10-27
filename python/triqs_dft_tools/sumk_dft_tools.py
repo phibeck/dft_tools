@@ -1281,7 +1281,9 @@ class SumkDFTTools(SumkDFT):
 
         if mpi.is_master_node():
             # k-dependent-projections.
-            assert self.k_dep_projection == 0, "transport_distribution: k dependent projection is not implemented!"
+            # to be checked. But this should be obsolete atm, works for both cases
+            # k_dep_projection is nowhere used
+            # assert sum_k.k_dep_projection == 0, "transport_distribution: k dependent projection is not implemented!"
             # positive Om_mesh
             assert all(
                 Om >= 0.0 for Om in Om_mesh), "transport_distribution: Om_mesh should not contain negative values!"
