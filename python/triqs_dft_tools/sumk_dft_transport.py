@@ -165,7 +165,7 @@ def fermi_dis(w, beta, der=0):
     if der == 0:
         return fermi
     elif der == 1:
-        return - beta * fermi ** 2 * numpy.exp(exponent) 
+        return - beta * fermi ** 2 * numpy.exp(exponent)
     else:
         raise('higher order of derivative than 1 not implemented')
 
@@ -257,7 +257,7 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
             V_H_diag = numpy.zeros(numpy.shape(dataK.Xbar('Ham', 1)), dtype=complex)
             V_H_diag[:, range(V_H_diag.shape[1]), range(V_H_diag.shape[1]), :] = numpy.einsum('knna -> kna', dataK.Xbar('Ham', 1))
             velocities_k = ( V_H_diag - dataK.Xbar('AA') * 1j*( dataK.E_K[:,None,:,None] - dataK.E_K[:,:,None,None] ) ) / HARTREETOEV / BOHRTOANG
-            
+
         if calc_inverse_mass:
             V_dot_D = numpy.einsum('kmnab, knoab -> kmoab', dataK.Xbar('Ham', 1)[:,:,:,:,None], dataK.D_H[:,:,:,None,:])
             V_dot_D_dagger = V_dot_D.conj().transpose(0,2,1,3,4)
@@ -333,7 +333,7 @@ def raman_vertex(sumk,ik,direction,code,options=None):
         for dire in options["custom_dir"]:
             assert numpy.shape(numpy.array(options["custom_dir"][dire]))==(3,3), "raman_vertex: custom_dir must have shape 3x3 (a numpy array or a nested list)"
             if dire in dir_names:
-                if ik==0 and direction==dire: 
+                if ik==0 and direction==dire:
                     mpi.report("Warning: the direction %s was already loaded and will be replace with the one provided in custom_dir"%dire)
                 idir = dir_names.index(dire)
                 # dir_names[idir]=direction
@@ -341,7 +341,7 @@ def raman_vertex(sumk,ik,direction,code,options=None):
             else:
                 dir_names.append(dire)
                 dir_array.append(options["custom_dir"][dire])
-    
+
     dir_array=[numpy.array(el,dtype=numpy.float_) for el in dir_array] # convert list to numpy array
 
     if direction in dir_names:
@@ -353,7 +353,7 @@ def raman_vertex(sumk,ik,direction,code,options=None):
     ram_vert = numpy.zeros( (n_bands, n_bands), dtype=complex)
     for i in range(n_bands):
         ram_vert[i,i]=numpy.dot(dir_array[idir],sumk.inverse_mass[ik,i,:,:]).trace()
-    
+
     return ram_vert
 
 
@@ -408,12 +408,12 @@ def init_spectroscopy(sum_k, code='wien2k', w90_params={}):
         assert all(isinstance(name, str) for name in ['seedname', 'pathname']), f'Check pathname {w90_params["pathname"]} and seedname {w90_params["seedname"]}'
         for file_ending in ['.wout', '_hr.dat', '.chk', '.mmn', '.eig']:
             filename = [pathname, w90_params['seedname'], file_ending]
-            assert os.path.isfile(''.join(filename)), f'Filename {"".join(filename)} does not exist!' 
+            assert os.path.isfile(''.join(filename)), f'Filename {"".join(filename)} does not exist!'
         calc_velocity = w90_params['calc_velocity'] if 'calc_velocity' in w90_params else True
         calc_inverse_mass = w90_params['calc_inverse_mass'] if 'calc_inverse_mass' in w90_params else False
         assert all(isinstance(name, bool) for name in [calc_velocity, calc_inverse_mass]), f'Parameter {calc_velocity} or {calc_inverse_mass} not bool!'
 
-        # recompute sum_k instances on denser grid 
+        # recompute sum_k instances on denser grid
         sum_k, cell_volume, _ = recompute_w90_input_on_different_mesh(sum_k, w90_params['seedname'], nk_optics=w90_params['nk_optics'], pathname=pathname,
                                                                       calc_velocity=calc_velocity, calc_inverse_mass=calc_inverse_mass)
 
@@ -465,8 +465,8 @@ def transport_distribution(sum_k, beta, cell_volume, directions=['xx'], energy_w
 
     Returns
     -------
-    Gamma_w : dictionary of double matrices 
-              transport distribution function in each direction, frequency given by Om_mesh_out and omega 
+    Gamma_w : dictionary of double matrices
+              transport distribution function in each direction, frequency given by Om_mesh_out and omega
     omega : list of double
             omega vector
     Om_mesh_out : list of double
@@ -496,7 +496,7 @@ def transport_distribution(sum_k, beta, cell_volume, directions=['xx'], energy_w
     # Define mesh for Green's function and in the specified energy window
     if (with_Sigma == True):
         omega = numpy.array([round(x.real, 12)
-                                  for x in sum_k.Sigma_imp_w[0].mesh])
+                                  for x in sum_k.Sigma_imp[0].mesh])
         mesh = None
         mu = sum_k.chemical_potential
         n_om = len(omega)
@@ -513,13 +513,13 @@ def transport_distribution(sum_k, beta, cell_volume, directions=['xx'], energy_w
             # In the future there should be an option in gf to manipulate the mesh (e.g. truncate) directly.
             # For now we stick with this:
             for icrsh in range(sum_k.n_corr_shells):
-                Sigma_save = sum_k.Sigma_imp_w[icrsh].copy()
+                Sigma_save = sum_k.Sigma_imp[icrsh].copy()
                 spn = sum_k.spin_block_names[sum_k.corr_shells[icrsh]['SO']]
                 glist = lambda: [GfReFreq(target_shape=(block_dim, block_dim), window=(omega[
                                           0], omega[-1]), n_points=n_om) for block, block_dim in sum_k.gf_struct_sumk[icrsh]]
-                sum_k.Sigma_imp_w[icrsh] = BlockGf(
+                sum_k.Sigma_imp[icrsh] = BlockGf(
                     name_list=spn, block_list=glist(), make_copies=False)
-                for i, g in sum_k.Sigma_imp_w[icrsh]:
+                for i, g in sum_k.Sigma_imp[icrsh]:
                     for iL in g.indices[0]:
                         for iR in g.indices[0]:
                             for iom in range(n_om):
@@ -556,7 +556,7 @@ def transport_distribution(sum_k, beta, cell_volume, directions=['xx'], energy_w
     ikarray = numpy.array(list(range(sum_k.n_k)))
     for ik in mpi.slice_array(ikarray):
         # Calculate G_w  for ik and initialize A_kw
-        G_w = sum_k.lattice_gf(ik, mu, iw_or_w="w", broadening=broadening, mesh=mesh, with_Sigma=with_Sigma)
+        G_w = sum_k.lattice_gf(ik, mu, broadening=broadening, mesh=mesh, with_Sigma=with_Sigma)
         A_kw = [numpy.zeros((sum_k.n_orbitals[ik][isp], sum_k.n_orbitals[ik][isp], n_om), dtype=numpy.complex_)
                 for isp in range(n_inequiv_spin_blocks)]
 
@@ -620,7 +620,7 @@ def transport_distribution(sum_k, beta, cell_volume, directions=['xx'], energy_w
                             for iq in range(len(Om_mesh)):
                                 if(iw + iOm_mesh[iq] >= n_om or omega[iw] < -Om_mesh[iq] + energy_window[0] or omega[iw] > Om_mesh[iq] + energy_window[1]):
                                     continue
-                                
+
                                 Gamma_w[direction][iq, iw] += (numpy.dot(numpy.dot(numpy.dot(vert[v_i, v_i], A_kw[isp][A_i, A_i, int(iw + iOm_mesh[iq])]),
                                                                              vert[v_i, v_i]), A_kw[isp][A_i, A_i, iw]).trace().real * sum_k.bz_weights[ik])
 
@@ -637,7 +637,7 @@ def transport_function(beta, directions, hopping, velocities, energy_window, n_o
     .. math::
        \Phi_\alpha\beta(\omega) = \sum_k v_{k,\alpha} v_{k,\beta} \delta(\omega-\varepsilon)
 
-    in the direction :math:`\alpha\beta`. 
+    in the direction :math:`\alpha\beta`.
 
     Parameters
     ----------
@@ -659,7 +659,7 @@ def transport_function(beta, directions, hopping, velocities, energy_window, n_o
     Returns
     -------
     transp_func : dictionary of double array
-              transport function in each direction, frequencies given by energy_window 
+              transport function in each direction, frequencies given by energy_window
     """
 
     dir_to_int = {'x': 0, 'y': 1, 'z': 2}
@@ -685,8 +685,8 @@ def transport_coefficient(Gamma_w, omega, Om_mesh, spin_polarization, direction,
 
     Parameters
     ----------
-    Gamma_w : dictionary of double matrices 
-              transport distribution function in each direction, frequency given by Om_mesh_out and omega 
+    Gamma_w : dictionary of double matrices
+              transport distribution function in each direction, frequency given by Om_mesh_out and omega
     omega : list of double
             omega vector
     Om_mesh : list of double
@@ -754,8 +754,8 @@ def conductivity_and_seebeck(Gamma_w, omega, Om_mesh, SP, directions, beta, meth
 
     Parameters
     ----------
-    Gamma_w : dictionary of double matrices 
-              transport distribution function in each direction, frequency given by Om_mesh_out and omega 
+    Gamma_w : dictionary of double matrices
+              transport distribution function in each direction, frequency given by Om_mesh_out and omega
     omega : list of double
             omega vector
     Om_mesh : list of double
