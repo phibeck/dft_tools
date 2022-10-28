@@ -26,7 +26,6 @@ import triqs.utility.mpi as mpi
 from .symmetry import *
 from .sumk_dft import SumkDFT
 import scipy.constants as cst
-import wannierberri as wb
 import os.path
 
 __all__ = ['transport_distribution', 'conductivity_and_seebeck', 'write_output_to_hdf',
@@ -234,6 +233,15 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
     if calc_inverse_mass: inverse_mass = None
 
     if mpi.is_master_node():
+        # try wannierberri import
+        try:
+            import wannierberri as wb
+        except ImportError:
+            print('ImportError: WannierBerri needs to be installed to run test "Py_w90_optics_Sr2RuO4"')
+            try:
+                mpi.MPI.COMM_WORLD.Abort(1)
+            except:
+                sys.exit()
         # initialize WannierBerri system
         shift_gamma = numpy.array([0.0,0.0,0.0])
         #wberri = wb.System_w90(pathname + seedname, berry=True, fft='numpy')

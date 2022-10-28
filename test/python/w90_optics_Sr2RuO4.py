@@ -1,11 +1,4 @@
 #!/bin/python3
-
-try:
-    import wannierberri
-except ImportError:
-    import sys
-    sys.exit('WannierBerri needs to be installed to run test "Py_w90_optics_Sr2RuO4"')
-
 import numpy as np
 
 import triqs.utility.mpi as mpi

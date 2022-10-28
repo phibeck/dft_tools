@@ -33,7 +33,6 @@ from scipy.integrate import *
 from scipy.interpolate import *
 from scipy import constants as constants
 from itertools import product
-import wannierberri as wb
 
 if not hasattr(numpy, 'full'):
     # polyfill full for older numpy:
@@ -1229,6 +1228,15 @@ class SumkDFTTools(SumkDFT):
             kpts = None
 
             if mpi.is_master_node():
+                # try wannierberri import
+                try:
+                    import wannierberri as wb
+                except ImportError:
+                    print('ImportError: WannierBerri needs to be installed to run test "Py_w90_optics_Sr2RuO4"')
+                    try:
+                        mpi.MPI.COMM_WORLD.Abort(1)
+                    except:
+                        sys.exit()
                 # initialize WannierBerri system
                 wberri = wb.System_w90(pathname + seedname, berry=True)
                 grid = wb.Grid(wberri, NKdiv=1, NKFFT=[nk_x, nk_y, nk_z])
