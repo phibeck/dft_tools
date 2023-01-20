@@ -330,11 +330,29 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
                 velocities_k = (Hw_alpha + 1j * c_Hw_Aw_alpha) / HARTREETOEV / BOHRTOANG
 
         if calc_inverse_mass:
-            V_dot_D = numpy.einsum('kmnab, knoab -> kmoab', dataK.Xbar('Ham', 1)[:,:,:,:,None], dataK.D_H[:,:,:,None,:])
-            V_dot_D_dagger = V_dot_D.conj().transpose(0,2,1,3,4)
-            V_curly = numpy.einsum('knnab -> knab', V_dot_D + V_dot_D_dagger)
-            del2E_H_diag = numpy.einsum('knnab->knab', dataK.Xbar('Ham', 2)).real
-            inverse_mass = del2E_H_diag + V_curly
+            # inverse effective mass tensor: [k x n_orb x R x R]
+
+            # in the band basis
+            # muh_alphabeta = Hhbar_alphabeta
+            if oc_basis == 'h':
+                #V_dot_D = numpy.einsum('kmnab, knoab -> kmoab', dataK.Xbar('Ham', 1)[:,:,:,:,None], dataK.D_H[:,:,:,None,:])
+                #V_dot_D_dagger = V_dot_D.conj().transpose(0,2,1,3,4)
+                #V_curly = numpy.einsum('knnab -> knab', V_dot_D + V_dot_D_dagger)
+                #del2E_H_diag = numpy.einsum('knnab->knab', dataK.Xbar('Ham', 2)).real
+                #inverse_mass = del2E_H_diag + V_curly
+                Hhbar_alphabeta = dataK.Xbar('Ham', 2)
+                inverse_mass = numpy.einsum('knnab->knab', Hhbar_alphabeta)
+
+            # in the orbital basis
+            # muw_alphabeta = Hw_alphabeta
+            elif oc_basis == 'w':
+                Hw_alphabeta_R = dataK.Ham_R.copy()
+                for i in range(2):
+                    shape_cR = numpy.shape(dataK.cRvec_wcc)
+                    Hw_alphabeta_R = 1j * Hw_alphabeta_R.reshape((Hw_alphabeta_R.shape) + (1, )) * dataK.cRvec_wcc.reshape(
+                        (shape_cR[0], shape_cR[1], dataK.system.nRvec) + (1, ) * len(Hw_alphabeta_R.shape[3:]) + (3, ))
+                Hw_alphabeta = dataK.fft_R_to_k(Hw_alphabeta_R, hermitean=False)[dataK.select_K]
+                inverse_mass = numpy.einsum('knnab->knab', Hw_alphabeta)
 
         # read in rest from dataK
         cell_volume = dataK.cell_volume / BOHRTOANG ** 3
@@ -493,7 +511,7 @@ def init_spectroscopy(sum_k, code='wien2k', w90_params={}):
             oc_select = 'both'
         # further checks for calc_inverse_mass
         if calc_inverse_mass:
-            assert oc_basis == 'h', '"calc_inverse_mass" only implemented for "oc_basis" == "h"'
+            #assert oc_basis == 'h', '"calc_inverse_mass" only implemented for "oc_basis" == "h"'
             assert oc_select == 'both', '"oc_select" not implemented for "calc_inverse_mass"'
         # print some information
         mpi.report(f'{"Basis choice [h (Hamiltonian), w (Wannier)]:":<60s} {oc_basis}')
