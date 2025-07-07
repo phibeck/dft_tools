@@ -23,10 +23,10 @@
 
 ##########################################################################
 import sys
-try: # try wannierberri import - needs to be placed before importing numpy
-    import wannierberri as wb
-except ImportError:
-    pass
+#try: # try wannierberri import - needs to be placed before importing numpy
+#    import wannierberri as wb
+#except ImportError:
+#    pass
 import numpy
 from warnings import warn
 from triqs.gf import *
@@ -176,7 +176,8 @@ def fermi_dis(w, beta, der=0):
         raise ValueError('higher order of derivative than 1 not implemented')
 
 
-def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='./', calc_velocity=False, calc_inverse_mass=False, oc_select='both', oc_basis='h'):
+def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='./', add_spin=False, calc_velocity=False,
+                                          calc_inverse_mass=False, oc_select='both', oc_basis='h', wfs_reorder=None):
     r"""
     Recomputes dft_input objects on a finer mesh using WannierBerri and Wannier90 input.
 
@@ -193,6 +194,8 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
                elif three integers given, mesh is nk_optics
     pathname : string, optional, default='./'
                location of Wannier90 data
+    add_spin : boolean, optional, default=False
+               add spin channel
     calc_velocity : boolean, optional, default=False
                     whether the velocity (first derivative of H(k)) is computed
     calc_inverse_mass : boolean, optional, default=False
@@ -201,6 +204,8 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
                 select contributions for optical conductivity from ['intra', 'inter', 'both']
     oc_basis : string, optional, default='h'
                gauge choice options 'h' for Hamiltonian/band and 'w' for Wannier basis
+    wfs_reorder : list of integers, optional, default='none'
+                  reorder WFs if needed providing a list of integers of range n_orb
 
     Returns
     -------
@@ -219,6 +224,8 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
     # set-up k mesh depending on input shape
     # read in transport input and some checks
     read_transport_input_from_hdf(sum_k)
+    n_orb = numpy.max([sum_k.n_orbitals[ik][0] for ik in range(sum_k.n_k)])
+    _, _, n_sites, norb_per_site, _ = numpy.shape(sum_k.proj_mat)
 
     # first check for right formatting of sum_k.nk_optics
     assert len(nk_optics) in [1, 3], '"nk_optics" must be given as three integers or one float'
@@ -235,9 +242,20 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
         nk_x, nk_y, nk_z = nk_optics
 
     # check for spin calculation (not supported)
-    assert sum_k.SP == 0, 'spin dependent transport calculations are not supported.'
+    assert sum_k.SP == 0, 'spin-dependent transport calculations are not supported.'
 
-    n_orb = numpy.max([sum_k.n_orbitals[ik][0] for ik in range(sum_k.n_k)])
+    # adjust dimensions if spinful
+    if add_spin:
+        n_orb *= 2
+        norb_per_site *= 2
+        for icrsh in range(sum_k.n_corr_shells):
+            sum_k.corr_shells[icrsh]['dim'] *= 2
+
+    # check that provided list to reorder is continuous range
+    if wfs_reorder:
+        def is_continuous_range(lst):
+            return sorted(lst) == list(range(len(lst)))
+        assert is_continuous_range(wfs_reorder), f'provided list of WF reordering must be continuous from 0 to {n_orb-1}'
 
     # temporarily recompute the following quantities on a different mesh
     things_to_modify = {'bz_weights': None, 'hopping': None, 'kpt_weights': None, 'kpts': None,
@@ -248,8 +266,7 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
     n_kpts = nk_x * nk_y * nk_z
     kpts = numpy.zeros((n_kpts, 3))
     hopping = numpy.zeros((n_kpts, 1, n_orb, n_orb), dtype=complex)
-    proj_mat = numpy.zeros(numpy.shape(
-        hopping[:, 0, 0, 0]) + numpy.shape(sum_k.proj_mat[0, :]), dtype=complex)
+    proj_mat = numpy.zeros((n_kpts, 1, n_sites, norb_per_site, n_orb), dtype=complex)
     cell_volume = kpts = None
     if calc_velocity:
         velocities_k = None
@@ -264,9 +281,19 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
                 mpi.MPI.COMM_WORLD.Abort(1)
             except:
                 sys.exit()
+        import importlib
+        sys.path.insert(0, '/mnt/home/sbeck/work/codes/wannier-berri')
+        import wannierberri
+        importlib.reload(wannierberri)
+        import wannierberri as wb
         # initialize WannierBerri system
         shift_gamma = numpy.array([0.0, 0.0, 0.0])
         wberri = wb.System_w90(pathname + seedname, berry=True)
+        if add_spin:
+            wberri.double_spin()
+        if wfs_reorder:
+            wberri.reorder(wfs_reorder)
+            print(f'New WFs order: {wfs_reorder}')
         grid = wb.Grid(wberri, NKdiv=1, NKFFT=[nk_x, nk_y, nk_z])
         dataK = wb.data_K.Data_K_R(wberri, dK=shift_gamma, grid=grid)
 
@@ -516,6 +543,8 @@ def init_spectroscopy(sum_k, code='wien2k', w90_params={}):
             filename = [pathname, w90_params['seedname'], file_ending]
             assert os.path.isfile(
                 ''.join(filename)), f'Filename {"".join(filename)} does not exist!'
+        add_spin = w90_params['add_spin'] if 'add_spin' in w90_params else False
+        wfs_reorder = w90_params['wfs_reorder'] if 'wfs_reorder' in w90_params else None
         calc_velocity = w90_params['calc_velocity'] if 'calc_velocity' in w90_params else True
         calc_inverse_mass = w90_params['calc_inverse_mass'] if 'calc_inverse_mass' in w90_params else False
         assert all(isinstance(name, bool) for name in [
@@ -540,8 +569,9 @@ def init_spectroscopy(sum_k, code='wien2k', w90_params={}):
         mpi.report(f'{"Contributions from [intra(-band), inter(-band), both]:":<60s} {oc_select}')
 
         # recompute sum_k instances on denser grid
-        sum_k, _ = recompute_w90_input_on_different_mesh(sum_k, w90_params['seedname'], nk_optics=w90_params['nk_optics'], pathname=pathname,
-                                                         calc_velocity=calc_velocity, calc_inverse_mass=calc_inverse_mass, oc_select=oc_select, oc_basis=oc_basis)
+        sum_k, _ = recompute_w90_input_on_different_mesh(sum_k, w90_params['seedname'], nk_optics=w90_params['nk_optics'], pathname=pathname, add_spin=add_spin,
+                                                         calc_velocity=calc_velocity, calc_inverse_mass=calc_inverse_mass, oc_select=oc_select, oc_basis=oc_basis,
+                                                         wfs_reorder=wfs_reorder)
 
     # k-dependent-projections.
     # to be checked. But this should be obsolete atm, works for both cases
