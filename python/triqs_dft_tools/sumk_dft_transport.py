@@ -31,6 +31,8 @@ import numpy
 from warnings import warn
 from triqs.gf import *
 import triqs.utility.mpi as mpi
+from triqs_dft_tools.converters.wannier90 import generate_local_so_matrix_t2g
+from solid_dmft.postprocessing import plot_correlated_bands as pcb
 from .symmetry import *
 import scipy.constants as cst
 import os.path
@@ -298,6 +300,21 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
         dataK = wb.data_K.Data_K_R(wberri, dK=shift_gamma, grid=grid)
 
         assert dataK.HH_K.shape == hopping[:, 0, :, :].shape, 'wberri / wannier Hamiltonian has different number of orbitals than SumK object. Disentanglement is not supported as of now.'
+
+        def generate_srho_soc6(lambda_value):
+
+            add_soc = generate_local_so_matrix_t2g([lambda_value] * 3, 1, 6)
+            orb_from = ['dxz-up', 'dxz-dn', 'dyz-up', 'dyz-dn', 'dxy-up', 'dxy-dn']
+            orb_to = ['dyz-up', 'dxz-up', 'dxy-up', 'dyz-dn', 'dxz-dn', 'dxy-dn']
+            change_of_basis = pcb.change_basis(6, orb_to, orb_from)
+            add_soc = numpy.einsum('ij, jk -> ik', numpy.linalg.inv(change_of_basis), numpy.einsum('ij, jk -> ik', add_soc, change_of_basis))
+
+            return add_soc
+
+        # fix to add local SOC
+        lambda_value = 0.1
+        add_soc_24 = numpy.kron(numpy.eye(4), generate_srho_soc6(lambda_value))
+        dataK.set_R_mat('Ham', add_soc_24, R=(0,0,0), add=True)
 
         # read in hoppings and proj_mat
         if oc_basis == 'h':
