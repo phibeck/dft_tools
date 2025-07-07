@@ -388,7 +388,8 @@ def recompute_w90_input_on_different_mesh(sum_k, seedname, nk_optics, pathname='
                 inverse_mass = dataK.Xbar('Ham', 2)
             # in the orbital basis
             elif oc_basis == 'w':
-                inverse_mass = wb.data_K.Data_K_R._R_to_k_H(dataK, dataK.Ham_R, der=2, hermitian=True)
+                Hw_R = dataK.get_R_mat('Ham').copy()
+                inverse_mass = dataK.rvec.R_to_k(Hw_R, hermitian=True, der=2)[dataK.select_K]
             inverse_mass = inverse_mass / HARTREETOEV / BOHRTOANG**2
         # read in rest from dataK
         cell_volume = dataK.cell_volume / BOHRTOANG ** 3
